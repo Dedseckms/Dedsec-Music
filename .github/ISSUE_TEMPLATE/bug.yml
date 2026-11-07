@@ -1,0 +1,33 @@
+name: Ошибка
+description: Сообщить о проблеме в клиенте или серверном дополнении
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Не добавляй пароли, токены, личные ссылки и полные журналы с данными аккаунта.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Где возникла проблема?
+      options: [Android, Windows, Сервер]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия приложения и системы
+      placeholder: Версия из настроек, Android / realme UI / One UI или версия Windows
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Как повторить?
+      description: Шаги, ожидаемый результат и что произошло.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Дополнительные сведения
+      description: Скриншот без личных данных или короткий текст ошибки.

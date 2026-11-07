@@ -1,0 +1,80 @@
+name: ${STACK_NAME:-dedsec-music}
+
+services:
+  navidrome:
+    image: navidrome/navidrome:0.64.2
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128
+    ports: ["127.0.0.1:14533:4533"]
+    environment:
+      ND_ADDRESS: 0.0.0.0
+      ND_PORT: 4533
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_AUTOIMPORTPLAYLISTS: "false"
+      ND_SCANNER_SCHEDULE: "@every 5m"
+      ND_SCANNER_FOLLOWSYMLINKS: "false"
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_ENABLESHARING: "false"
+      ND_LOGLEVEL: warn
+    volumes:
+      - ./data/navidrome:/data
+      - ./data/music/library:/music:ro
+
+  api:
+    build: {context: ./api}
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 64
+    ulimits: {nofile: {soft: 256, hard: 256}}
+    depends_on: [navidrome]
+    ports: ["127.0.0.1:18083:8080"]
+    environment:
+      NAV_URL: http://navidrome:4533
+      STORAGE_ROOT: /storage
+      STATE_ROOT: /state
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data/music:/storage
+      - ./data/api:/state
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    profiles: [public]
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    depends_on: [navidrome, api]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      MUSIC_DOMAIN: ${MUSIC_DOMAIN:?set MUSIC_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    entrypoint: [/bin/sh, -ec]
+    command: ['test -s /bootstrap/owner.ready; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/bootstrap:/bootstrap:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config

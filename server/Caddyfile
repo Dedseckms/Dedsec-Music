@@ -1,0 +1,12 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$MUSIC_DOMAIN} {
+    encode zstd gzip
+    @initialAdmin path /auth/createAdmin /auth/createAdmin/*
+    respond @initialAdmin 403
+    @extension path /dedsec/profile/v1/* /dedsec/import/v1/* /api/auth/login /api/resources /api/settings/sources
+    reverse_proxy @extension api:8080
+    reverse_proxy navidrome:4533
+}
