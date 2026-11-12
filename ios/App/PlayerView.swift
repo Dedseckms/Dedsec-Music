@@ -9,11 +9,11 @@ struct PlayerView: View {
     @State private var dragged: Double?
     var body: some View {
         GeometryReader { geometry in
-            VStack(spacing: 16) {
+            VStack(spacing: 8) {
                 HStack { Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 36, height: 36) }; Spacer(); Text(store.source).font(.caption).lineLimit(1); Spacer(); Color.clear.frame(width: 36, height: 36) }
                 Spacer(minLength: 0)
-                let side = min(geometry.size.width - 48, geometry.size.height * 0.40, 360)
-                Artwork(id: store.now?.coverArt, size: max(120, side))
+                let side = min(geometry.size.width - 48, max(100, geometry.size.height - 420), 360)
+                Artwork(id: store.now?.coverArt, size: side)
                     .gesture(DragGesture(minimumDistance: 35).onEnded { value in
                         if abs(value.translation.width) > abs(value.translation.height) && abs(value.translation.width) > 55 { store.skip(value.translation.width < 0) }
                         else if value.translation.height > 75 { dismiss() }
