@@ -1,0 +1,58 @@
+name: Build iPhone IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['ios/**', '.github/workflows/ios.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Test shared iPhone logic
+        run: swift test --package-path ios/Core
+      - name: Install pinned project generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tools/xcodegen
+          curl --fail --location --proto '=https' --tlsv1.2 'https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip' -o .tools/xcodegen.zip
+          echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  .tools/xcodegen.zip' | shasum -a 256 --check
+          ditto -x -k .tools/xcodegen.zip .tools/xcodegen
+          generator="$(find .tools/xcodegen -type f -name xcodegen | head -1)"
+          test -n "$generator"
+          chmod +x "$generator"
+          "$generator" generate --spec ios/project.yml
+      - name: Build native iPhone application
+        run: >-
+          xcodebuild -project ios/DedSecMusic.xcodeproj -scheme DedSecMusic
+          -configuration Release -sdk iphoneos -destination 'generic/platform=iOS'
+          -derivedDataPath .tools/ios-build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package unsigned IPA for AltStore
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tools/ios-payload/Payload artifacts/ios
+          ditto '.tools/ios-build/Build/Products/Release-iphoneos/DedSecMusic.app' '.tools/ios-payload/Payload/DedSecMusic.app'
+          (cd .tools/ios-payload && zip -q -r ../../artifacts/ios/DedSec-Music-0.1.0-ios-unsigned.ipa Payload)
+          (cd artifacts/ios && shasum -a 256 *.ipa > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: DedSec-Music-iOS-unsigned
+          path: artifacts/ios/
+          if-no-files-found: error
+          retention-days: 14
