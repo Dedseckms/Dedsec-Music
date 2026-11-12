@@ -5,7 +5,7 @@
 ## Установка с Windows
 
 1. Установи AltServer и AltStore Classic по [официальной инструкции для Windows](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows). Используй указанные там версии iTunes и iCloud.
-2. Скачай файл `DedSec-Music-0.1.0-ios-unsigned.ipa` со страницы [Releases](https://github.com/Dedseckms/Dedsec-Music/releases). Если его ещё нет, сборка пока не опубликована.
+2. Скачай [`DedSec-Music-0.1.0-ios-unsigned.ipa`](https://github.com/Dedseckms/Dedsec-Music/releases/download/ios-v0.1.0/DedSec-Music-0.1.0-ios-unsigned.ipa) из [выпуска iPhone Preview](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.0).
 3. Открой IPA через AltStore. AltStore подпишет приложение твоим Apple ID и установит его на телефон. Пароль Apple вводится только в установленный AltStore/AltServer; музыкальному серверу он не нужен.
 4. В DedSec Music введи HTTPS-адрес своего Navidrome, логин и пароль музыкального аккаунта. Для загрузки файлов используется отдельный аккаунт загрузчика.
 
@@ -13,7 +13,7 @@
 
 ## Собрать самостоятельно
 
-Шаблон сборки — [`ios/github-actions.yml`](../ios/github-actions.yml). В своём репозитории скопируй его в `.github/workflows/ios.yml`, затем запусти workflow **Build iPhone IPA** на вкладке Actions. Если workflow уже подключён, копировать файл повторно не нужно. После успешной сборки скачай артефакт `DedSec-Music-iOS-unsigned`. Внутри находятся IPA и контрольная сумма SHA-256. Сертификаты Apple для этой сборки не требуются — подпись добавляет AltStore при установке.
+Открой вкладку Actions и запусти workflow **Build iPhone IPA**. После успешной сборки скачай артефакт `DedSec-Music-iOS-unsigned`: внутри IPA и контрольная сумма SHA-256. Сертификаты Apple для сборки не требуются — подпись добавляет AltStore при установке. Для собственного репозитория доступен [шаблон workflow](../ios/github-actions.yml).
 
 На Mac с Xcode и XcodeGen:
 

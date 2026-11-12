@@ -4,7 +4,7 @@
 | --- | --- |
 | Android 8.0+ | Нативный клиент Jetpack Compose / Media3, исходники в `app/`. |
 | Windows x64 | Compose Desktop / libVLC, широкая компоновка, установщик Inno Setup, исходники в `desktop/`. |
-| iPhone / iOS 17+ | Нативный SwiftUI / AVPlayer-клиент в `ios/`. Подготовлена сборка неподписанной IPA для AltStore; до успешной сборки артефакт не выпускается. |
+| iPhone / iOS 17+ | Нативный SwiftUI / AVPlayer-клиент в `ios/`. Предварительная версия IPA для AltStore: [установка](IPHONE.md). |
 | macOS | Запланирован клиент с системной интеграцией. Готовой сборки нет. |
 
 ## Модули
