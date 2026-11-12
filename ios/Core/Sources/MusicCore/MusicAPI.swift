@@ -11,6 +11,8 @@ public actor MusicAPI {
     private let session: URLSession
     private var token: String?
     private var authentication: Task<String, Error>?
+    private var valid = true
+    private var uploads: [UUID: HeaderOnlyUpload] = [:]
     public static let tokenGuide = URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/docs/YANDEX_IMPORT.md#получить-токен")!
     public init(_ credentials: Credentials) throws {
         self.credentials = credentials
@@ -39,6 +41,7 @@ public actor MusicAPI {
         return (output, http)
     }
     private func authorize() async throws -> String {
+        guard valid else { throw CancellationError() }
         if let token { return token }
         if let authentication { return try await authentication.value }
         let credentials = credentials; let url = endpoint("auth/login")
@@ -52,7 +55,7 @@ public actor MusicAPI {
             return value
         }
         authentication = pending
-        do { let result = try await pending.value; token = result; authentication = nil; return result }
+        do { let result = try await pending.value; guard valid else { throw CancellationError() }; token = result; authentication = nil; return result }
         catch { authentication = nil; throw error }
     }
     public func login() async throws { _ = try await authorize() }
@@ -190,13 +193,20 @@ public actor MusicAPI {
         var encoded = URLComponents(); encoded.queryItems = [p("p", password)]
         login.setValue(String((encoded.percentEncodedQuery ?? "p=").dropFirst(2)), forHTTPHeaderField: "X-Password")
         let (bytes, response) = try await data(login, limit: 65536)
+        try Task.checkCancellation(); guard valid else { throw CancellationError() }
         guard response.statusCode == 200, let jwt = String(data: bytes, encoding: .utf8), !jwt.isEmpty, jwt.count < 16384 else { throw MusicError.message("Проверь отдельный логин и пароль загрузки") }
         var target = URLComponents(url: base.appendingPathComponent("api/resources"), resolvingAgainstBaseURL: false)!
         target.queryItems = [p("source", "Uploads"), p("path", "/" + file.lastPathComponent), p("override", "false")]
         var request = URLRequest(url: target.url!); request.httpMethod = "POST"
         request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization"); request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (_, result) = try await session.upload(for: request, fromFile: file)
-        guard let http = result as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MusicError.message("Файл отклонён сервером: проверь формат и длительность до 20 минут") }
+        let transfer = HeaderOnlyUpload(); let id = UUID(); uploads[id] = transfer
+        defer { uploads.removeValue(forKey: id) }
+        let result = try await transfer.send(request, file: file)
+        try Task.checkCancellation(); guard valid else { throw CancellationError() }
+        guard (200..<300).contains(result.statusCode) else { throw MusicError.message("Файл отклонён сервером: проверь формат и длительность до 20 минут") }
     }
-    public func invalidate() { authentication?.cancel(); authentication = nil; token = nil; session.invalidateAndCancel() }
+    public func invalidate() {
+        valid = false; authentication?.cancel(); authentication = nil; token = nil
+        uploads.values.forEach { $0.cancel() }; uploads.removeAll(); session.invalidateAndCancel()
+    }
 }

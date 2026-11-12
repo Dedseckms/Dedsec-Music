@@ -40,6 +40,9 @@ struct RootView: View {
         .sheet(item: $addSong) { PlaylistPicker(song: $0) }
         .alert("DedSec Music", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) { Button("Понятно") { store.message = nil } } message: { Text(store.message ?? "") }
         .onChange(of: scene) { _, phase in if phase == .active { store.refreshImport() } }
+        .onChange(of: store.account.map { DeviceStorage.hash($0.server + "|" + $0.username) } ?? "") { _, _ in
+            fullPlayer = false; settings = false; addSong = nil
+        }
     }
     private func stack<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         NavigationStack {
@@ -266,7 +269,7 @@ struct PlaylistPicker: View {
                 ForEach(store.playlists) { list in Button { Task { await store.playlistMutation { try await $0.add(song, to: list) }; dismiss() } } label: { VStack(alignment: .leading, spacing: 5) { Text(list.name); Text("\(list.songCount ?? 0) треков").font(.caption).foregroundStyle(.secondary) } } }
             }.navigationTitle("В какой плейлист?").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
-                .task { if let api = store.api, let values = try? await api.playlists() { store.playlists = values } }
+                .task { await store.reloadPlaylists() }
                 .alert("Новый плейлист", isPresented: $create) { TextField("Название", text: $name); Button("Создать") { let title = name; name = ""; Task { await store.playlistMutation { try await $0.createPlaylist(title) } } }; Button("Отмена", role: .cancel) {} }
         }.presentationDragIndicator(.visible)
     }
