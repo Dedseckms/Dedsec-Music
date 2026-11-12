@@ -49,7 +49,10 @@ struct AddMusicView: View {
             }
         }.navigationTitle("Добавить музыку").task {
             if uploadUser.isEmpty { uploadUser = store.account?.username ?? "" }
-            if uploadServer.isEmpty { uploadServer = store.account?.server ?? "" }
+            if uploadServer.isEmpty {
+                let music = store.account?.server ?? MusicAPI.defaultServer
+                uploadServer = music.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == MusicAPI.defaultServer ? MusicAPI.defaultUploadServer : music
+            }
             store.refreshImport()
         }
         .fileImporter(isPresented: $pick, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in

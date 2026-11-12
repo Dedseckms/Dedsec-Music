@@ -32,6 +32,11 @@ final class CoreTests: XCTestCase {
         let song = try JSONDecoder().decode(Song.self, from: Data(#"{"id":"same","title":"Track","duration":120}"#.utf8))
         XCTAssertEqual(song.duration, 120); XCTAssertNil(song.artist)
     }
+    func testRadioMoodTokensAndEmptyAnalysisRemainExplicit() throws {
+        XCTAssertEqual(Set(Mood.allCases.map(\.apiValue)), Set(["ANY", "CHILL", "ENERGY", "FOCUS", "WORKOUT", "PARTY", "SAD", "HAPPY"]))
+        let mix = try JSONDecoder().decode(RadioMix.self, from: Data(#"{"songs":[],"reason":"ANALYZING","analysis":{"indexed":0,"total":100}}"#.utf8))
+        XCTAssertTrue(mix.songs.isEmpty); XCTAssertTrue(mix.emptyMessage.contains("анализирует"))
+    }
     func testOldImportResponseAllowsMissingPlaylistCounters() throws {
         let json = #"{"job":{"id":"42","state":"paused_auth","phase":"paused","discovered":0,"total":0,"downloaded":0,"skipped":0,"failed":0,"unavailable":0,"excluded":0,"processed":0}}"#
         let envelope = try JSONDecoder().decode(ImportEnvelope.self, from: Data(json.utf8))

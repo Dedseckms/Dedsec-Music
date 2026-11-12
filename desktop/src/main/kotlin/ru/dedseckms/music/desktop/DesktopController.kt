@@ -12,7 +12,7 @@ import java.nio.file.StandardCopyOption.*
 
 data class DesktopPage(val kind: String, val title: String, val songs: List<Song>, val playlist: MusicPlaylist? = null, val albums: List<Album> = emptyList())
 data class DesktopState(
-    val importStatus: ImportStatus = ImportStatus(),
+    val importStatus: ImportStatus = ImportStatus(), val isAdmin: Boolean = false,
     val username: String = "", val loggedIn: Boolean = false, val demo: Boolean = false,
     val busy: Boolean = false, val message: String? = null, val tab: String = "Главная", val filter: String = "Треки",
     val query: String = "", val songs: List<Song> = emptyList(), val albums: List<Album> = emptyList(),
@@ -41,6 +41,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var prepareJob: Job? = null
     private var api: NavApi? = null
     private var profile: ProfileApi? = null
+    fun adminApi(): ProfileApi? = if (state.value.isAdmin && !state.value.demo) profile else null
     private var importSession: YandexImportSession? = null
     var store: DesktopStore? = null; private set
     var covers: DesktopCovers? = null; private set
@@ -173,7 +174,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         if (revision == generation) mutable.update { it.copy(songs = songs, albums = albums, playlists = lists, favorites = favorite, more = songs.size >= 100) }
         runCatching { profile?.await { me() } }.getOrNull()?.let { info ->
             val picture = if (info.avatarVersion.isNotBlank()) runCatching { profile?.await { avatar() } }.getOrNull() else null
-            if (revision == generation) mutable.update { it.copy(total = info.librarySongCount, avatar = picture) }
+            if (revision == generation) mutable.update { it.copy(total = info.librarySongCount, avatar = picture, isAdmin = info.isAdmin) }
         }
     }
     fun tab(value: String) {
@@ -304,25 +305,38 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         else if (state.value.wave) wave(keep = true)
         else mutable.update { it.copy(ended = true) }
     }
-    fun toggle() { if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }
-    fun skip(forward: Boolean) { invalidateMix(); if (queue.move(forward, state.value.repeat)) playCurrent() }
+    fun toggle() { invalidateMix(); if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }
+    fun skip(forward: Boolean) {
+        invalidateMix()
+        val song = state.value.now; val activeProfile = profile
+        val position = audio.state.value.position; val duration = audio.state.value.duration
+        if (queue.move(forward, state.value.repeat)) {
+            if (forward && state.value.wave && song != null && activeProfile != null) scope.launch {
+                try { activeProfile.await { radioEvent(song.id, "skipped", position, duration) } }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* Playback never waits for feedback. */ }
+            }
+            playCurrent()
+        }
+    }
     fun select(index: Int) { invalidateMix(); if (queue.select(index)) playCurrent() }
-    fun shuffle() { prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
+    fun shuffle() { invalidateMix(); prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
     fun repeat() { mutable.update { it.copy(repeat = !it.repeat) }; prepareNext() }
     fun wave(mood: MixMood = state.value.mood, mode: MixMode = state.value.mode, keep: Boolean = false) {
-        val nav = api ?: return; val local = store ?: return; val revision = generation
+        val activeProfile = profile ?: return; val local = store ?: return; val revision = generation
         invalidateMix(); val mixToken = mixRevision
-        val favorites = state.value.favorites.toList()
+        val exclude = if (keep) state.value.queue.takeLast(100).map(Song::id) else listOfNotNull(state.value.now?.id)
         mutable.update { it.copy(busy = true) }
         mixJob = scope.launch {
             try {
-                val candidates = nav.await { random(300) }
-                val songs = withContext(Dispatchers.IO) { MixEngine.build(candidates + favorites, favorites.map(Song::id).toSet(), local.history(), emptySet(), mode, mood = mood) }
+                val mix = activeProfile.await { radio(mode, mood, local.history(), exclude = exclude) }
                 currentCoroutineContext().ensureActive()
                 if (revision == generation && mixToken == mixRevision) {
                     mixJob = null
-                    mutable.update { it.copy(mood = mood, mode = mode) }
-                    play(songs, source = playbackSourceLabel("", true, mood), wave = true)
+                    if (mix.songs.isEmpty()) notice(mix.emptyMessage()) else {
+                        mutable.update { it.copy(mood = mood, mode = mode) }
+                        play(mix.songs, source = playbackSourceLabel("", true, mood), wave = true)
+                    }
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (revision == generation && mixToken == mixRevision) notice(failure(e)) }

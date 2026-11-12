@@ -84,9 +84,43 @@ public enum MusicError: Error, LocalizedError, Sendable {
     case message(String)
     public var errorDescription: String? { if case .message(let value) = self { return value }; return "Не удалось выполнить операцию" }
 }
+public struct AdminUser: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let username: String
+    public let isAdmin: Bool
+    public let uploadCount: Int
+    public let canDelete: Bool
+}
+public struct AdminUpload: Decodable, Sendable {
+    public let name: String
+    public let source: String
+}
+public struct AdminUploads: Decodable, Sendable {
+    public let items: [AdminUpload]
+    public let total: Int
+}
+public struct RadioMix: Decodable, Sendable {
+    public let songs: [Song]
+    public let reason: String?
+    public var emptyMessage: String {
+        reason == "ANALYZING" ? "Сервер ещё анализирует музыку. Попробуй позже или выбери другое настроение" : "Нет подходящих треков. Попробуй другое настроение или режим"
+    }
+}
 public enum Mood: String, CaseIterable, Identifiable, Sendable {
     case any = "Любое", chill = "Чилл", energy = "Бодро", focus = "Фокус", workout = "Спорт", party = "Вечер", sad = "Грусть", happy = "Радость"
     public var id: Self { self }
+    public var apiValue: String {
+        switch self {
+        case .any: return "ANY"
+        case .chill: return "CHILL"
+        case .energy: return "ENERGY"
+        case .focus: return "FOCUS"
+        case .workout: return "WORKOUT"
+        case .party: return "PARTY"
+        case .sad: return "SAD"
+        case .happy: return "HAPPY"
+        }
+    }
     public var icon: String { switch self { case .any: return "sparkles"; case .chill: return "leaf"; case .energy: return "bolt.fill"; case .focus: return "scope"; case .workout: return "figure.run"; case .party: return "party.popper"; case .sad: return "cloud"; case .happy: return "sun.max" } }
     public func matches(_ song: Song) -> Bool {
         let genre = (song.genre ?? "").lowercased()

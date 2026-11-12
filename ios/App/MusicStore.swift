@@ -47,6 +47,8 @@ import MusicCore
     private var mixRevision = 0
     private var revision = 0
     private var waveMood: Mood?
+    private var waveFavoritesOnly = false
+    private var recordedPlayback = false
     private var coverPending: Set<String> = []
     init() {
         player.automaticallyWaitsToMinimizeStalling = false
@@ -153,7 +155,7 @@ import MusicCore
         guard queueSongs.indices.contains(index), let api, let account else { return }
         playTask?.cancel(); player.pause(); player.replaceCurrentItem(with: nil)
         let song = queueSongs[index]; let version = revision
-        now = song; position = 0; duration = song.duration ?? 0; buffering = true; playing = false
+        now = song; position = 0; duration = song.duration ?? 0; buffering = true; playing = false; recordedPlayback = false
         loadCover(song.coverArt)
         if let next = queue.order.dropFirst(queue.position + 1).first { loadCover(queueSongs[next].coverArt) }
         playTask = Task {
@@ -171,14 +173,23 @@ import MusicCore
     func resume() { guard now != nil else { return }; if player.currentItem == nil, let index = queue.current { select(index); return }; player.play(); updatePlayback() }
     func pause() { invalidateMix(); player.pause(); playTask?.cancel(); buffering = false; updatePlayback() }
     func seek(_ seconds: Double) { player.seek(to: CMTime(seconds: max(0, min(duration, seconds)), preferredTimescale: 600)); position = seconds }
-    func skip(_ forward: Bool) { invalidateMix(); if let index = queue.step(forward, wrap: repeated) { select(index) } else if !forward { seek(0) } }
+    func skip(_ forward: Bool) {
+        invalidateMix()
+        if let index = queue.step(forward, wrap: repeated) {
+            if forward, waveMood != nil, let api, let now {
+                let position = position; let duration = duration
+                Task { try? await api.radioEvent(now.id, kind: "skipped", position: position, duration: duration) }
+            }
+            select(index)
+        } else if !forward { seek(0) }
+    }
     func shuffle() { invalidateMix(); shuffled.toggle(); queue.shuffle(shuffled) }
     private func ended() {
         if repeated { seek(0); player.play() }
         else if let index = queue.step(true) { select(index) }
         else if let waveMood {
             let token = mixRevision; let version = revision
-            Task { if token == mixRevision && version == revision { await wave(waveMood) } }
+            Task { if token == mixRevision && version == revision { await wave(waveMood, favoritesOnly: waveFavoritesOnly) } }
         }
         else { player.pause(); seek(0); updatePlayback() }
     }
@@ -187,14 +198,11 @@ import MusicCore
         let version = revision; let token = mixRevision
         let task = Task {
             do {
-                let random = favoritesOnly ? favorites : try await api.random()
+                let mix = try await api.radio(mood, favoritesOnly: favoritesOnly, exclude: Array(queueSongs.suffix(100).map(\.id)))
                 try Task.checkCancellation()
                 guard version == revision && token == mixRevision else { return }
-                var seen = Set<String>(); let unique = random.filter { seen.insert($0.id).inserted }
-                let matching = unique.filter(mood.matches); let pool = matching.isEmpty ? unique : matching
-                let selected = pool.filter { $0.id != now?.id }.shuffled()
-                guard !(selected.isEmpty && pool.isEmpty) else { message = "Добавь музыку в библиотеку или избранное"; return }
-                setQueue(selected.isEmpty ? pool : selected, source: "Моя волна · \(mood.rawValue)"); waveMood = mood
+                guard !mix.songs.isEmpty else { message = mix.emptyMessage; return }
+                setQueue(mix.songs, source: "Моя волна · \(mood.rawValue)"); waveMood = mood; waveFavoritesOnly = favoritesOnly
             } catch { if !Task.isCancelled && version == revision && token == mixRevision { report(error) } }
         }
         mixTask = task
@@ -209,6 +217,11 @@ import MusicCore
         if let seconds = player.currentItem?.duration.seconds, seconds.isFinite, seconds > 0 { duration = seconds }
         if player.currentItem?.status == .failed { buffering = false; message = "Трек не удалось воспроизвести. Проверь сервер и попробуй другой трек" }
         guard let now else { return }
+        if playing && !recordedPlayback && position >= min(30, max(1, duration / 2)), let api {
+            recordedPlayback = true
+            let position = position; let duration = duration
+            Task { try? await api.radioEvent(now.id, kind: "played", position: position, duration: duration) }
+        }
         var info: [String: Any] = [MPMediaItemPropertyTitle: now.title, MPMediaItemPropertyArtist: now.artist ?? "",
             MPMediaItemPropertyAlbumTitle: now.album ?? "", MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position, MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0]

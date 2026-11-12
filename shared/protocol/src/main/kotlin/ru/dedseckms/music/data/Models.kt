@@ -4,8 +4,8 @@ import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
-const val DEFAULT_MUSIC_SERVER = "https://music.example.org"
-const val DEFAULT_UPLOAD_SERVER = "https://upload.music.example.org"
+const val DEFAULT_MUSIC_SERVER = "https://music.dedseckms.ru"
+const val DEFAULT_UPLOAD_SERVER = "https://upload.music.dedseckms.ru"
 
 class Credentials(val server: String, val username: String, val password: String) {
     val accountId: String = sha256(server.trimEnd('/') + "|" + username.lowercase()).take(32)

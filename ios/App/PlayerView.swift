@@ -52,6 +52,7 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = "dark"
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("wifiOnly") private var wifiOnly = true
+    @State private var isAdmin = false
     var body: some View {
         NavigationStack {
             Form {
@@ -59,6 +60,7 @@ struct SettingsView: View {
                     Text(String(store.account?.username.prefix(1) ?? "D").uppercased()).font(.title.bold()).frame(width: 56, height: 56).background(Color.accentColor.opacity(0.2), in: Circle())
                     VStack(alignment: .leading, spacing: 5) { Text(store.account?.username ?? "").font(.headline); Text("Личные плейлисты · Общая музыка").font(.caption).foregroundStyle(.secondary) }
                 }.padding(.vertical, 8) }
+                if isAdmin, let api = store.api { Section("Администрирование") { NavigationLink { AdminView(api: api) } label: { Label("Пользователи и их загрузки", systemImage: "person.2.badge.gearshape") } } }
                 Section("Оформление") {
                     Picker("Тема", selection: $appearance) { Text("Тёмная").tag("dark"); Text("Светлая").tag("light"); Text("Как в системе").tag("system") }
                     Picker("Акцент", selection: $accent) { Text("Синий").tag("blue"); Text("Сирень").tag("violet"); Text("Мята").tag("mint"); Text("Роза").tag("rose"); Text("Янтарь").tag("amber") }
@@ -68,10 +70,11 @@ struct SettingsView: View {
                     Link(destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/releases")!) { Label("Версии на GitHub", systemImage: "arrow.up.right.square") }
                     Text("Новую IPA установи через AltStore. Бесплатная подпись Apple требует регулярного обновления.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.0").font(.caption).foregroundStyle(.secondary)
+                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.1").font(.caption).foregroundStyle(.secondary)
                     Button("Выйти из аккаунта", role: .destructive) { store.logout(); dismiss() }
                 }
             }.navigationTitle("Настройки").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
+                .task { isAdmin = (try? await store.api?.isAdmin()) == true }
         }
     }
 }

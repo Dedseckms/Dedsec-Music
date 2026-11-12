@@ -56,7 +56,7 @@ extension EnvironmentValues { var addSong: (Song) -> Void { get { self[AddSongKe
 
 struct LoginView: View {
     @EnvironmentObject private var store: MusicStore
-    @State private var server = "https://music.example.org"
+    @State private var server = MusicAPI.defaultServer
     @State private var username = ""
     @State private var password = ""
     @State private var remember = true

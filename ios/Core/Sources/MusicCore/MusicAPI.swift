@@ -6,6 +6,8 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sen
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 public actor MusicAPI {
+    public static let defaultServer = "https://music.dedseckms.ru"
+    public static let defaultUploadServer = "https://upload.music.dedseckms.ru"
     private let credentials: Credentials
     private let base: URL
     private let session: URLSession
@@ -59,12 +61,14 @@ public actor MusicAPI {
         catch { authentication = nil; throw error }
     }
     public func login() async throws { _ = try await authorize() }
-    private func request(_ path: String, method: String = "GET", body: Data? = nil, mime: String = "application/json") async throws -> Data {
+    private func request(_ path: String, method: String = "GET", body: Data? = nil, mime: String = "application/json", limit: Int = 4_194_304, query: [URLQueryItem] = []) async throws -> Data {
         for attempt in 0...1 {
-            var request = URLRequest(url: endpoint(path)); request.httpMethod = method; request.httpBody = body
+            var url = URLComponents(url: endpoint(path), resolvingAgainstBaseURL: false)!
+            if !query.isEmpty { url.queryItems = query }
+            var request = URLRequest(url: url.url!); request.httpMethod = method; request.httpBody = body
             request.setValue("Bearer \(try await authorize())", forHTTPHeaderField: "Authorization")
             if body != nil { request.setValue(mime, forHTTPHeaderField: "Content-Type") }
-            let (bytes, response) = try await data(request)
+            let (bytes, response) = try await data(request, limit: limit)
             if response.statusCode == 401 && attempt == 0 { token = nil; continue }
             guard (200..<300).contains(response.statusCode) else {
                 let message: String
@@ -204,6 +208,43 @@ public actor MusicAPI {
         let result = try await transfer.send(request, file: file)
         try Task.checkCancellation(); guard valid else { throw CancellationError() }
         guard (200..<300).contains(result.statusCode) else { throw MusicError.message("Файл отклонён сервером: проверь формат и длительность до 20 минут") }
+    }
+    public func isAdmin() async throws -> Bool {
+        let data = try await request("dedsec/profile/v1/admin/me", limit: 65536)
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["isAdmin"] as? Bool == true
+    }
+    public func adminUsers() async throws -> [AdminUser] {
+        struct Envelope: Decodable { let users: [AdminUser] }
+        return try JSONDecoder().decode(Envelope.self, from: await request("dedsec/profile/v1/admin/users", limit: 524288)).users
+    }
+    private func adminUserPath(_ id: String) throws -> String {
+        guard !id.isEmpty, id.count <= 80, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }) else { throw MusicError.message("Некорректный аккаунт") }
+        return "dedsec/profile/v1/admin/users/" + id
+    }
+    public func adminUploads(_ id: String, offset: Int = 0) async throws -> AdminUploads {
+        // Query parameters are built separately to preserve the fixed origin and route.
+        let path = try adminUserPath(id) + "/uploads"
+        return try JSONDecoder().decode(AdminUploads.self, from: await request(path, limit: 524288, query: [p("offset", String(max(0, offset))), p("limit", "50")]))
+    }
+    public func adminCreate(_ username: String, password: String) async throws -> Bool {
+        guard !username.isEmpty, username.count <= 80, password.count >= 12, password.utf8.count <= 72 else { throw MusicError.message("Проверь логин и пароль: минимум 12 символов") }
+        let data = try await request("dedsec/profile/v1/admin/users", method: "POST", body: JSONEncoder().encode(["username": username, "password": password]), limit: 65536)
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["uploadReady"] as? Bool == true
+    }
+    public func adminDelete(_ id: String) async throws { _ = try await request(adminUserPath(id), method: "DELETE", limit: 65536) }
+    public func radio(_ mood: Mood, favoritesOnly: Bool = false, exclude: [String] = []) async throws -> RadioMix {
+        let payload: [String: Any] = ["mood": mood.apiValue, "mode": favoritesOnly ? "FAVORITES" : "BALANCED", "size": 40,
+                                     "excludeIds": Array(exclude.suffix(100)), "history": [], "dislikedIds": []]
+        let bytes = try await request("dedsec/profile/v1/radio/mix", method: "POST", body: JSONSerialization.data(withJSONObject: payload), limit: 524288)
+        let mix = try JSONDecoder().decode(RadioMix.self, from: bytes)
+        guard mix.songs.count <= 60 else { throw MusicError.message("Слишком большой микс") }
+        return mix
+    }
+    public func radioEvent(_ id: String, kind: String, position: Double, duration: Double) async throws {
+        guard ["played", "skipped", "disliked"].contains(kind), position.isFinite, duration.isFinite else { return }
+        let payload: [String: Any] = ["id": id, "kind": kind, "positionMs": Int(max(0, min(position, 86400)) * 1000),
+                                     "durationMs": Int(max(0, min(duration, 86400)) * 1000)]
+        _ = try await request("dedsec/profile/v1/radio/events", method: "POST", body: JSONSerialization.data(withJSONObject: payload), limit: 65536)
     }
     public func invalidate() {
         valid = false; authentication?.cancel(); authentication = nil; token = nil

@@ -60,7 +60,7 @@ data class AppState(
     val uploadConnected: Boolean = false, val serverDisk: ServerDisk? = null,
     val checkingUploads: Boolean = false, val scanActive: Boolean = false, val uploadCheckError: String? = null,
     val visualStyle: String = "material", val palette: String = "blue",
-    val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false,
+    val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false, val isAdmin: Boolean = false,
     val libraryTotal: Int? = null,
     val wifiOnly: Boolean = true, val theme: String = "system", val dynamicColor: Boolean = true,
 )
@@ -117,6 +117,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(avatarPath = store.avatar.takeIf { file -> file.isFile }?.path, avatarVersion = store.version()) }
     }
     fun onAppResume() { if (state.value.loggedIn && !state.value.demo) { refreshProfile(); refreshImport() } }
+    fun adminApi(): ProfileApi? = if (state.value.isAdmin && !state.value.demo) app.profileApi() else null
     fun refreshImport() {
         if (!state.value.loggedIn || state.value.demo) return
         val profile = app.profileApi() ?: return
@@ -162,7 +163,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 if (revision == generation && current() && account == app.credentials.activeId()) {
                     lastProfileRefresh = System.currentTimeMillis()
                     mutable.update { it.copy(avatarPath = result.second, avatarVersion = result.first.avatarVersion,
-                        libraryTotal = result.first.librarySongCount.takeIf { count -> count >= 0 }, profileBusy = false) }
+                        libraryTotal = result.first.librarySongCount.takeIf { count -> count >= 0 }, profileBusy = false, isAdmin = result.first.isAdmin) }
                     if (announce) toast(if (remove) "Аватарка удалена" else "Аватарка сохранена")
                 }
             } catch (error: CancellationException) { throw error
@@ -499,18 +500,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun trackGain(song: Song, decibels: Int) { local()?.trackGain(song.id, decibels); app.volumeChanges.tryEmit(Unit) }
     fun wave(mode: MixMode = state.value.mixMode, mood: MixMood = state.value.mixMood) {
         if (state.value.demo) { toast("Подключи сервер, и здесь будет персональный микс"); return }
-        val nav = api() ?: return
+        val profile = app.profileApi() ?: return
         val store = local() ?: return
         val revision = generation
+        val exclude = listOfNotNull(state.value.now?.id)
         mutable.update { it.copy(mixLoading = true, mixMode = mode, mixMood = mood) }
         mixTask.launch(viewModelScope) { current ->
             try {
-                val songs = withContext(Dispatchers.IO) {
-                    val favorites = runCatching { nav.favorites() }.getOrDefault(state.value.favorites)
-                    val candidates = runCatching { nav.random(300) }.getOrElse { store.offline() }
-                    MixEngine.build(candidates + favorites, state.value.favoriteIds, store.history(), store.disliked(), mode, mood = mood)
+                val mix = profile.await { radio(mode, mood, store.history(), store.disliked(), exclude) }
+                if (revision == generation && current()) {
+                    mutable.update { it.copy(mixLoading = false) }
+                    if (mix.songs.isEmpty()) toast(mix.emptyMessage()) else playPrepared(mix.songs, 0, true, mode, mood)
                 }
-                if (revision == generation && current()) { mutable.update { it.copy(mixLoading = false) }; playPrepared(songs, 0, true, mode, mood) }
             } catch (error: CancellationException) { throw error
             } catch (error: Exception) { if (revision == generation && current()) { mutable.update { it.copy(mixLoading = false) }; toast(safeMessage(error)) } }
         }
@@ -532,9 +533,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         player.sendCustomCommand(SessionCommand(if (forward) NEXT_COMMAND else PREVIOUS_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
     }
     fun seek(position: Long) { controller?.seekTo(position) }
-    fun shuffle() { controller?.sendCustomCommand(SessionCommand(SHUFFLE_COMMAND, Bundle.EMPTY), Bundle.EMPTY) }
+    fun shuffle() { mixTask.cancel(); mutable.update { it.copy(mixLoading = false) }; controller?.sendCustomCommand(SessionCommand(SHUFFLE_COMMAND, Bundle.EMPTY), Bundle.EMPTY) }
     fun repeat() { controller?.let { it.repeatMode = if (it.repeatMode == Player.REPEAT_MODE_OFF) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF } }
-    fun dislike() { state.value.now?.let { local()?.dislike(it.id); next(); toast("Трек исключён из моих миксов") } }
+    fun dislike() { state.value.now?.let { song ->
+        local()?.dislike(song.id)
+        val profile = app.profileApi(); val position = state.value.position; val duration = state.value.duration
+        if (profile != null) viewModelScope.launch {
+            try { profile.await { radioEvent(song.id, "disliked", position, duration) } }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* The local exclusion is retained for the next mix request. */ }
+        }
+        next(); toast("Трек исключён из моих миксов")
+    } }
     fun favorite(song: Song) {
         if (state.value.demo) { mutable.update { it.copy(favoriteIds = if (song.id in it.favoriteIds) it.favoriteIds - song.id else it.favoriteIds + song.id) }; return }
         val nav = api() ?: return

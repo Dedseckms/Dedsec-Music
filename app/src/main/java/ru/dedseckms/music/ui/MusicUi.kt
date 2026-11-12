@@ -553,10 +553,13 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
 }
 
 @Composable private fun SettingsSheet(state: AppState, vm: MusicViewModel, dismiss: () -> Unit) {
+    var admin by remember { mutableStateOf(false) }
+    if (admin && state.isAdmin) vm.adminApi()?.let { api -> AdminDialog(api) { admin = false } }
     ModalBottomSheet(dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Настройки", style = MaterialTheme.typography.headlineMedium)
             ProfileControls(state, vm)
+            if (state.isAdmin) OutlinedButton({ admin = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.ManageAccounts, null); Spacer(Modifier.width(8.dp)); Text("Пользователи и их загрузки") }
             AppearanceControls(state, vm)
             HorizontalDivider()
             PreferenceSwitch("Скачивать по Wi-Fi", "Для сохранения музыки на телефон", state.wifiOnly, vm::wifiOnly)

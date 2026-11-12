@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           mkdir -p .tools/ios-payload/Payload artifacts/ios
           ditto '.tools/ios-build/Build/Products/Release-iphoneos/DedSecMusic.app' '.tools/ios-payload/Payload/DedSecMusic.app'
-          (cd .tools/ios-payload && zip -q -r ../../artifacts/ios/DedSec-Music-0.1.0-ios-unsigned.ipa Payload)
+          (cd .tools/ios-payload && zip -q -r ../../artifacts/ios/DedSec-Music-0.1.1-ios-unsigned.ipa Payload)
           (cd artifacts/ios && shasum -a 256 *.ipa > SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -326,8 +326,11 @@ private val LocalSample = staticCompositionLocalOf { false }
 private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceAtLeast(0) / 1000 % 60).toString().padStart(2, '0')}"
 
 @Composable private fun Settings(c: DesktopController, s: DesktopState) {
+    var admin by remember { mutableStateOf(false) }
+    if (admin && s.isAdmin) c.adminApi()?.let { api -> AdminDialog(api) { admin = false } }
     LazyColumn(contentPadding = PaddingValues(26.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Section("Твоя территория", "НАСТРОЙКИ") }
+        if (s.isAdmin) item { OutlinedButton({ admin = true }) { Icon(Icons.Rounded.ManageAccounts, null); Spacer(Modifier.width(8.dp)); Text("Пользователи и их загрузки") } }
         item { Surface(shape = Rounded, color = MaterialTheme.colorScheme.surfaceContainer) { Row(Modifier.fillMaxWidth().padding(22.dp), verticalAlignment = Alignment.CenterVertically) { Avatar(s, Modifier.size(68.dp)); Spacer(Modifier.width(20.dp)); Column(Modifier.weight(1f)) { Text(s.username, style = MaterialTheme.typography.titleLarge); Text("Личные плейлисты · общая музыка", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; OutlinedButton({ val chooser = JFileChooser(); if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION && Files.size(chooser.selectedFile.toPath()) <= 5_000_000) c.avatar(Files.readAllBytes(chooser.selectedFile.toPath())) }) { Text("Аватарка") } } } }
         item { Section("Оформление") }
         item {

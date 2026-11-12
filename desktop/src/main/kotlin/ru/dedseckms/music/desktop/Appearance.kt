@@ -8,7 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.*
 
-object DesktopBuild { const val VERSION = "0.3.0" }
+object DesktopBuild { const val VERSION = "0.3.1" }
 
 data class Appearance(val dark: Boolean = true, val palette: String = "blue", val style: String = "material", val amoled: Boolean = false) {
     fun validated() = copy(palette = palette.takeIf { it in PALETTES } ?: "blue", style = style.takeIf { it in STYLES } ?: "material", amoled = dark && amoled)

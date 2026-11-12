@@ -55,6 +55,7 @@ class MusicService : MediaLibraryService() {
     private var queueWindow: QueueWindow? = null
     private var queueAccount: String? = null
     private var hydration: Job? = null
+    private var mixExtension: Job? = null
     private var playbackRevision = 0
     private var loudness: android.media.audiofx.LoudnessEnhancer? = null
 
@@ -75,7 +76,8 @@ class MusicService : MediaLibraryService() {
             playbackRevision++
             artworkJob?.cancel()
             prefetchJob?.cancel(); prefetchKey = null
-            hydration?.cancel(); queueWindow = null; queueAccount = null; mixActive = false; mixAccount = null; queueSource = ""
+            hydration?.cancel(); mixExtension?.cancel(); extending = false
+            queueWindow = null; queueAccount = null; mixActive = false; mixAccount = null; queueSource = ""
             loudness?.release(); loudness = null; player.volume = 1f
             player.stop(); player.clearMediaItems()
         } }
@@ -84,6 +86,17 @@ class MusicService : MediaLibraryService() {
             override fun onEvents(player: Player, events: Player.Events) { publishNavigation() }
             override fun onPlaybackStateChanged(playbackState: Int) { if (playbackState == Player.STATE_ENDED) pauseAtEnd(player) }
             override fun onAudioSessionIdChanged(audioSessionId: Int) { loudness?.release(); loudness = null; applyTrackVolume() }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (mixActive && mixAccount == app.credentials.activeId() && reason == Player.DISCONTINUITY_REASON_SEEK && oldPosition.mediaItem?.mediaId != newPosition.mediaItem?.mediaId) {
+                    val song = oldPosition.mediaItem?.let(::songFromItem) ?: return
+                    val profile = app.profileApi() ?: return
+                    scope.launch {
+                        try { profile.await { radioEvent(song.id, "skipped", oldPosition.positionMs, song.duration * 1000L) } }
+                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (_: Exception) { /* Feedback never blocks playback. */ }
+                    }
+                }
+            }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 applyTrackVolume()
                 if (transitionId != mediaItem?.mediaId) { recordedTransition = false; transitionId = mediaItem?.mediaId }
@@ -144,7 +157,7 @@ class MusicService : MediaLibraryService() {
         super.onDestroy()
     }
 
-    private fun <T> background(action: () -> T): ListenableFuture<T> {
+    private fun <T> background(action: suspend () -> T): ListenableFuture<T> {
         val result = SettableFuture.create<T>()
         val account = app.credentials.activeId()
         scope.launch {
@@ -241,37 +254,34 @@ class MusicService : MediaLibraryService() {
         }
     }
 
-    private fun mixSongs(): List<Song> {
-        val api = app.api() ?: throw IOException("Войди в аккаунт")
-        val store = app.local() ?: throw IOException("Войди в аккаунт")
-        val favorites = runCatching { api.favorites() }.getOrElse { store.cachedFavorites() }
-        val random = runCatching { api.random(200) }.getOrElse { store.offline() }
-        val favoriteIds = favorites.map { it.id }.toMutableSet()
-        store.pendingFavorites().forEach { (id, enabled) -> if (enabled) favoriteIds += id else favoriteIds -= id }
-        return MixEngine.build(random + favorites + store.cachedSongs(), favoriteIds, store.history(), store.disliked(), currentMixMode, size = 40, mood = currentMixMood)
-    }
+    private suspend fun mixSongs(profile: ProfileApi, store: LocalStore, mode: MixMode, mood: MixMood, exclude: List<String> = emptyList()): List<Song> =
+        profile.await { radio(mode, mood, store.history(), store.disliked(), exclude) }.songs
 
     private fun extendMix() {
         if (extending || mixAccount != app.credentials.activeId()) return
+        val profile = app.profileApi() ?: return
+        val store = app.local() ?: return
+        val mode = currentMixMode; val mood = currentMixMood
         extending = true
         val account = mixAccount
         val revision = playbackRevision
-        scope.launch {
+        mixExtension = scope.launch {
             try {
-                val existing = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+                if (account != app.credentials.activeId() || revision != playbackRevision) return@launch
+                val existing = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.takeLast(100)
                 val more = withContext(Dispatchers.IO) {
-                    val candidates = mixSongs()
-                    candidates.filterNot { it.id in existing }.ifEmpty { candidates }.take(20).map { resolve(it, account ?: throw IOException("Аккаунт изменился")) }
+                    mixSongs(profile, store, mode, mood, existing).map { resolve(it, account ?: throw IOException("Аккаунт изменился")) }
                 }
                 if (revision == playbackRevision && mixActive && account == app.credentials.activeId()) player.addMediaItems(more)
             } catch (_: Exception) { /* Continue the existing queue when the server is unavailable. */ }
-            finally { extending = false }
+            finally { if (revision == playbackRevision) extending = false }
         }
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
         override fun onSetMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             val revision = ++playbackRevision
+            mixExtension?.cancel(); extending = false
             hydration?.cancel()
             artworkJob?.cancel()
             queueWindow = null; queueAccount = null; mixActive = false; mixAccount = null; queueSource = ""
@@ -349,28 +359,32 @@ class MusicService : MediaLibraryService() {
                 ?: app.api()?.call("getSong", "id" to mediaId)?.getJSONObject("song")?.let(Song::parse)
             if (song == null) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItem(item(song), null)
         }
-        override fun onAddMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> = background {
-            hydration?.cancel(); queueWindow = null; queueAccount = null
-            val api = app.api() ?: throw IOException("Войди в аккаунт")
-            if (mediaItems.any { it.mediaId == "wave" }) {
-                mixActive = true
-                queueSource = ""
-                currentMixMode = MixMode.BALANCED
-                currentMixMood = MixMood.ANY
-                mixAccount = api.credentials.accountId
-                mixSongs().map { resolve(it, api.credentials.accountId) }.toMutableList()
-            } else {
-                queueSource = mediaItems.firstOrNull()?.mediaMetadata?.extras?.getString("playbackSource").orEmpty()
-                mixActive = mediaItems.firstOrNull()?.mediaMetadata?.extras?.getBoolean("mix") == true
-                currentMixMode = runCatching { MixMode.valueOf(mediaItems.firstOrNull()?.mediaMetadata?.extras?.getString("mixMode").orEmpty()) }.getOrDefault(MixMode.BALANCED)
-                currentMixMood = runCatching { MixMood.valueOf(mediaItems.firstOrNull()?.mediaMetadata?.extras?.getString("mixMood").orEmpty()) }.getOrDefault(MixMood.ANY)
-                mixAccount = if (mixActive) api.credentials.accountId else null
-                mediaItems.mapNotNull { entry ->
-                    val song = entry.mediaMetadata.extras?.getString("song")?.let { runCatching { Song.parse(org.json.JSONObject(it)) }.getOrNull() }
+        override fun onAddMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> {
+            val profile = app.profileApi(); val store = app.local(); val account = app.credentials.activeId()
+            val api = app.api()
+            val revision = ++playbackRevision
+            mixExtension?.cancel(); extending = false; hydration?.cancel()
+            val wave = mediaItems.any { it.mediaId == "wave" }
+            val extras = mediaItems.firstOrNull()?.mediaMetadata?.extras
+            val mode = if (wave) MixMode.BALANCED else runCatching { MixMode.valueOf(extras?.getString("mixMode").orEmpty()) }.getOrDefault(MixMode.BALANCED)
+            val mood = if (wave) MixMood.ANY else runCatching { MixMood.valueOf(extras?.getString("mixMood").orEmpty()) }.getOrDefault(MixMood.ANY)
+            return background {
+                if (account == null || api == null || account != app.credentials.activeId() || revision != playbackRevision) throw IOException("Очередь устарела")
+                val songs = if (wave) mixSongs(profile ?: throw IOException("Войди в аккаунт"), store ?: throw IOException("Войди в аккаунт"), mode, mood)
+                else mediaItems.mapNotNull { entry ->
+                    entry.mediaMetadata.extras?.getString("song")?.let { runCatching { Song.parse(org.json.JSONObject(it)) }.getOrNull() }
                         ?: entry.requestMetadata.searchQuery?.let { api.songs(it, count = 1).firstOrNull() }
                         ?: runCatching { Song.parse(api.call("getSong", "id" to entry.mediaId).getJSONObject("song")) }.getOrNull()
-                    song?.let { resolve(it, api.credentials.accountId) }
-                }.toMutableList()
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (account != app.credentials.activeId() || revision != playbackRevision) throw IOException("Очередь устарела")
+                    if (wave && songs.isEmpty()) throw IOException("Нет подходящих треков для волны")
+                    queueWindow = null; queueAccount = null
+                    queueSource = if (wave) "" else extras?.getString("playbackSource").orEmpty()
+                    mixActive = wave || extras?.getBoolean("mix") == true
+                    currentMixMode = mode; currentMixMood = mood; mixAccount = if (mixActive) account else null
+                    songs.map { resolve(it, account) }.toMutableList()
+                }
             }
         }
         override fun onSearch(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> {
