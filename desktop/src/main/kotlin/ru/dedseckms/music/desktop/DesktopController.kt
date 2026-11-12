@@ -36,7 +36,9 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private val mutable = MutableStateFlow(DesktopState().styled())
     val state = mutable.asStateFlow()
     val queue = QueueState()
-    val audio = DesktopAudio(scope, ::onEnded)
+    val audio = DesktopAudio(scope, ::onEnded, advanced = ::onCrossfaded)
+    private var queueEpoch = 0L
+    private var prepareJob: Job? = null
     private var api: NavApi? = null
     private var profile: ProfileApi? = null
     private var importSession: YandexImportSession? = null
@@ -48,7 +50,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var mixJob: Job? = null
     private var mixRevision = 0L
     private fun invalidateMix() { mixRevision++; mixJob?.cancel(); mixJob = null }
-    private fun cancelSession() { importSession?.close(); importSession = null; accountTasks.forEach(Job::cancel); accountTasks.clear(); pageJob?.cancel(); searchJob?.cancel(); playJob?.cancel(); invalidateMix(); audio.stop() }
+    private fun cancelSession() { queueEpoch++; prepareJob?.cancel(); importSession?.close(); importSession = null; accountTasks.forEach(Job::cancel); accountTasks.clear(); pageJob?.cancel(); searchJob?.cancel(); playJob?.cancel(); invalidateMix(); audio.stop() }
     private fun track(job: Job): Job { accountTasks += job; job.invokeOnCompletion { accountTasks.remove(job) }; return job }
     private var pageJob: Job? = null
     private var searchJob: Job? = null
@@ -253,19 +255,49 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         invalidateMix()
         if (state.value.demo) { notice("Это демонстрация интерфейса. Войди на сервер, чтобы слушать музыку"); return }
         if (songs.isEmpty()) return
+        queueEpoch++; prepareJob?.cancel(); audio.clearNext()
         queue.set(songs, index); mutable.update { it.copy(wave = wave, source = source, shuffle = false) }; playCurrent()
     }
     private fun playCurrent() {
         val song = queue.current ?: return; val nav = api ?: return; val local = store ?: return
-        playJob?.cancel(); audio.stop(); recorded = ""
+        playJob?.cancel(); prepareJob?.cancel(); audio.stop(preservePrepared = true); recorded = ""
         mutable.update { it.copy(now = song, queue = queue.order.map(queue.songs::get), cursor = queue.cursor, ended = false) }
         playJob = scope.launch {
             try {
                 val uri = withContext(Dispatchers.IO) { local.audio(song).takeIf(Files::isRegularFile)?.toUri()?.toString() ?: nav.stream(song) }
-                audio.start(uri)
+                audio.start(uri, "$queueEpoch:${queue.order[queue.cursor]}")
+                prepareNext()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { notice(failure(e)) }
         }
+    }
+    private fun prepareNext() {
+        prepareJob?.cancel()
+        val position = if (queue.cursor + 1 < queue.order.size) queue.cursor + 1 else if (state.value.repeat && queue.order.size > 1) 0 else -1
+        val index = queue.order.getOrNull(position)
+        if (index == null || index == queue.order.getOrNull(queue.cursor)) { audio.clearNext(); return }
+        val song = queue.songs[index]; val nav = api ?: return; val local = store ?: return
+        val epoch = queueEpoch; val revision = generation; val cache = covers
+        prepareJob = track(scope.launch {
+            try {
+                val uri = withContext(Dispatchers.IO) { local.audio(song).takeIf(Files::isRegularFile)?.toUri()?.toString() ?: nav.stream(song) }
+                currentCoroutineContext().ensureActive()
+                if (epoch != queueEpoch || revision != generation) return@launch
+                audio.prepareNext("$epoch:$index", uri)
+                cache?.get(song.coverArt, 384)
+            } catch (error: CancellationException) { throw error
+            } catch (_: Exception) { /* Normal track completion remains available when preloading fails. */ }
+        })
+    }
+    private fun onCrossfaded(key: String) {
+        val parts = key.split(':')
+        if (parts.size != 2 || parts[0].toLongOrNull() != queueEpoch) return
+        val index = parts[1].toIntOrNull() ?: return
+        val position = queue.order.indexOf(index)
+        if (!queue.select(position)) return
+        val song = queue.current ?: return; recorded = ""
+        mutable.update { it.copy(now = song, queue = queue.order.map(queue.songs::get), cursor = queue.cursor, ended = false) }
+        prepareNext()
     }
     private fun onEnded() {
         if (queue.move(true, state.value.repeat)) playCurrent()
@@ -275,8 +307,8 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     fun toggle() { if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }
     fun skip(forward: Boolean) { invalidateMix(); if (queue.move(forward, state.value.repeat)) playCurrent() }
     fun select(index: Int) { invalidateMix(); if (queue.select(index)) playCurrent() }
-    fun shuffle() { queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) } }
-    fun repeat() { mutable.update { it.copy(repeat = !it.repeat) } }
+    fun shuffle() { prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
+    fun repeat() { mutable.update { it.copy(repeat = !it.repeat) }; prepareNext() }
     fun wave(mood: MixMood = state.value.mood, mode: MixMode = state.value.mode, keep: Boolean = false) {
         val nav = api ?: return; val local = store ?: return; val revision = generation
         invalidateMix(); val mixToken = mixRevision

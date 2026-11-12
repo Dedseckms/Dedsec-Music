@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import SwiftUI
+import AVFoundation
+import MediaPlayer
+import MusicCore
+
+@MainActor final class MusicStore: ObservableObject {
+    @Published var account: Credentials?
+    @Published var busy = false
+    @Published var message: String?
+    @Published var songs: [Song] = []
+    @Published var albums: [Album] = []
+    @Published var playlists: [MusicPlaylist] = []
+    @Published var favorites: [Song] = []
+    @Published var offline: [Song] = []
+    @Published var now: Song?
+    @Published var playing = false
+    @Published var buffering = false
+    @Published var position = 0.0
+    @Published var duration = 0.0
+    @Published var shuffled = false
+    @Published var repeated = false
+    @Published var source = "Сейчас играет"
+    @Published var search: SearchResult?
+    @Published var searching = false
+    @Published var query = ""
+    @Published var importJob: ImportJob?
+    @Published var importError: String?
+    @Published var importBusy = false
+    @Published var downloading: String?
+    @Published var uploading = false
+    @Published var covers: [String: UIImage] = [:]
+    var api: MusicAPI?
+    private let player = AVPlayer()
+    private var observer: Any?
+    private var subscriptions: [NSObjectProtocol] = []
+    private var transportTargets: [(MPRemoteCommand, Any)] = []
+    private var queue = PlaybackQueue()
+    private var queueSongs: [Song] = []
+    private var playTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
+    private var importTask: Task<Void, Never>?
+    private var downloadTask: Task<Void, Error>?
+    private var revision = 0
+    private var waveMood: Mood?
+    private var coverPending: Set<String> = []
+    init() {
+        player.automaticallyWaitsToMinimizeStalling = false
+        observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.updatePlayback() }
+        }
+        subscriptions.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] notification in
+            Task { @MainActor in
+                guard let self, let item = notification.object as? AVPlayerItem, item === self.player.currentItem else { return }
+                self.ended()
+            }
+        })
+        subscriptions.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            let began = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue
+            if began { Task { @MainActor in self?.pause() } }
+        })
+        subscriptions.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            let removed = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+            if removed { Task { @MainActor in self?.pause() } }
+        })
+        let commands = MPRemoteCommandCenter.shared()
+        bind(commands.playCommand) { $0.resume() }; bind(commands.pauseCommand) { $0.pause() }
+        bind(commands.togglePlayPauseCommand) { $0.toggle() }; bind(commands.nextTrackCommand) { $0.skip(true) }; bind(commands.previousTrackCommand) { $0.skip(false) }
+        let target = commands.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            Task { @MainActor in self?.seek(event.positionTime) }; return .success
+        }
+        transportTargets.append((commands.changePlaybackPositionCommand, target))
+        if let saved = DeviceStorage.remembered() {
+            account = saved; api = try? MusicAPI(saved); offline = DeviceStorage.offline(saved)
+            Task { await refresh(); refreshImport() }
+        }
+    }
+    private func bind(_ command: MPRemoteCommand, _ action: @escaping @MainActor (MusicStore) -> Void) {
+        let target = command.addTarget { [weak self] _ in Task { @MainActor in if let self { action(self) } }; return .success }
+        transportTargets.append((command, target))
+    }
+    deinit {
+        if let observer { player.removeTimeObserver(observer) }
+        for item in subscriptions { NotificationCenter.default.removeObserver(item) }
+        for (command, target) in transportTargets { command.removeTarget(target) }
+        playTask?.cancel(); searchTask?.cancel(); importTask?.cancel(); downloadTask?.cancel()
+    }
+    func report(_ error: Error) {
+        if error is CancellationError { return }
+        if let error = error as? MusicError { message = error.localizedDescription }
+        else { message = "Не удалось выполнить операцию. Проверь соединение" }
+    }
+    func login(server: String, username: String, password: String, remember: Bool) async {
+        guard !busy else { return }; busy = true; defer { busy = false }
+        do {
+            let normalized = try MusicAPI.validateServer(server).absoluteString
+            let candidate = Credentials(server: normalized, username: username.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
+            let service = try MusicAPI(candidate); try await service.login()
+            try DeviceStorage.remember(remember ? candidate : nil)
+            reset(); account = candidate; api = service; offline = DeviceStorage.offline(candidate)
+            await refresh(); refreshImport()
+        } catch { report(error) }
+    }
+    private func reset() {
+        revision += 1; playTask?.cancel(); searchTask?.cancel(); importTask?.cancel(); downloadTask?.cancel(); player.pause(); player.replaceCurrentItem(with: nil)
+        if let api { Task { await api.invalidate() } }
+        api = nil; account = nil; now = nil; songs = []; albums = []; playlists = []; favorites = []; offline = []; covers = [:]
+        coverPending = []; importJob = nil; importError = nil; importBusy = false; source = "Сейчас играет"; waveMood = nil
+        queueSongs = []; queue = PlaybackQueue(); search = nil; query = ""; searching = false; shuffled = false; repeated = false
+        playing = false; buffering = false; position = 0; duration = 0; MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+    func logout() { reset(); try? DeviceStorage.remember(nil) }
+    func refresh() async {
+        guard let api else { return }; let version = revision
+        do {
+            async let tracks = api.songs(); async let records = api.albums(); async let lists = api.playlists(); async let liked = api.favorites()
+            let values = try await (tracks, records, lists, liked)
+            guard version == revision else { return }
+            songs = values.0; albums = values.1; playlists = values.2; favorites = values.3
+        } catch { if version == revision { report(error) } }
+    }
+    func more() async {
+        guard let api else { return }; let version = revision
+        do { let next = try await api.songs(offset: songs.count); if version == revision { songs += next.filter { song in !songs.contains { $0.id == song.id } } } }
+        catch { if version == revision { report(error) } }
+    }
+    func searchChanged() {
+        searchTask?.cancel(); let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let api else { search = nil; searching = false; return }
+        searching = true; let version = revision
+        searchTask = Task {
+            do { try await Task.sleep(for: .milliseconds(280)); let result = try await api.search(text)
+                try Task.checkCancellation(); guard version == revision else { return }; search = result; searching = false
+            } catch { if !Task.isCancelled && version == revision { searching = false; report(error) } }
+        }
+    }
+    func play(_ songs: [Song], at index: Int = 0, source: String = "Библиотека") {
+        guard songs.indices.contains(index) else { return }
+        waveMood = nil; self.source = source; queueSongs = songs; queue.set(count: songs.count, selected: index); queue.shuffle(shuffled); select(index)
+    }
+    private func select(_ index: Int) {
+        guard queueSongs.indices.contains(index), let api, let account else { return }
+        playTask?.cancel(); player.pause(); player.replaceCurrentItem(with: nil)
+        let song = queueSongs[index]; let version = revision
+        now = song; position = 0; duration = song.duration ?? 0; buffering = true; playing = false
+        loadCover(song.coverArt)
+        if let next = queue.order.dropFirst(queue.position + 1).first { loadCover(queueSongs[next].coverArt) }
+        playTask = Task {
+            do {
+                let local = try DeviceStorage.audio(song, account)
+                let url = FileManager.default.fileExists(atPath: local.path) ? local : try await api.mediaURL("stream", id: song.id)
+                try Task.checkCancellation(); guard version == revision else { return }
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try AVAudioSession.sharedInstance().setActive(true)
+                player.replaceCurrentItem(with: AVPlayerItem(url: url)); player.play(); updatePlayback()
+            } catch { if !Task.isCancelled && version == revision { buffering = false; report(error) } }
+        }
+    }
+    func toggle() { if playing || buffering { pause() } else { resume() } }
+    func resume() { guard now != nil else { return }; if player.currentItem == nil, let index = queue.current { select(index); return }; player.play(); updatePlayback() }
+    func pause() { player.pause(); playTask?.cancel(); buffering = false; updatePlayback() }
+    func seek(_ seconds: Double) { player.seek(to: CMTime(seconds: max(0, min(duration, seconds)), preferredTimescale: 600)); position = seconds }
+    func skip(_ forward: Bool) { if let index = queue.step(forward, wrap: repeated) { select(index) } else if !forward { seek(0) } }
+    func shuffle() { shuffled.toggle(); queue.shuffle(shuffled) }
+    private func ended() {
+        if repeated { seek(0); player.play() }
+        else if let index = queue.step(true) { select(index) }
+        else if let waveMood { Task { await wave(waveMood) } }
+        else { player.pause(); seek(0); updatePlayback() }
+    }
+    func wave(_ mood: Mood, favoritesOnly: Bool = false) async {
+        guard let api else { return }; let version = revision
+        do {
+            let random = favoritesOnly ? favorites : try await api.random()
+            var seen = Set<String>(); let unique = random.filter { seen.insert($0.id).inserted }
+            let matching = unique.filter(mood.matches); let pool = matching.isEmpty ? unique : matching
+            let selected = pool.filter { $0.id != now?.id }.shuffled()
+            guard version == revision else { return }
+            guard !(selected.isEmpty && pool.isEmpty) else { message = "Добавь музыку в библиотеку или избранное"; return }
+            play(selected.isEmpty ? pool : selected, source: "Моя волна · \(mood.rawValue)"); waveMood = mood
+        } catch { if version == revision { report(error) } }
+    }
+    private func updatePlayback() {
+        playing = player.timeControlStatus == .playing
+        buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite { position = max(0, seconds) }
+        if let seconds = player.currentItem?.duration.seconds, seconds.isFinite, seconds > 0 { duration = seconds }
+        if player.currentItem?.status == .failed { buffering = false; message = "Трек не удалось воспроизвести. Проверь сервер и попробуй другой трек" }
+        guard let now else { return }
+        var info: [String: Any] = [MPMediaItemPropertyTitle: now.title, MPMediaItemPropertyArtist: now.artist ?? "",
+            MPMediaItemPropertyAlbumTitle: now.album ?? "", MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: position, MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0]
+        if let id = now.coverArt, let image = covers[id] { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image } }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+    func loadCover(_ id: String?) {
+        guard let id, covers[id] == nil, !coverPending.contains(id), coverPending.count < 6, let api else { return }
+        coverPending.insert(id); let version = revision
+        Task {
+            defer { if version == revision { coverPending.remove(id) } }
+            guard let bytes = try? await api.cover(id), let image = UIImage(data: bytes), version == revision else { return }
+            if covers.count >= 60, let first = covers.keys.first { covers.removeValue(forKey: first) }
+            covers[id] = image
+        }
+    }
+    func favorite(_ song: Song) async {
+        guard let api else { return }; let version = revision
+        do { let enabled = !favorites.contains { $0.id == song.id }; try await api.favorite(song, enabled: enabled)
+            guard version == revision else { return }; if enabled { favorites.append(song) } else { favorites.removeAll { $0.id == song.id } }
+        } catch { if version == revision { report(error) } }
+    }
+    func playlistMutation(_ operation: (MusicAPI) async throws -> Void) async {
+        guard let api else { return }
+        if importJob?.syncingPlaylists == true { message = "Дождись завершения переноса плейлистов"; return }
+        let version = revision
+        do { try await operation(api); let lists = try await api.playlists(); if version == revision { playlists = lists } }
+        catch { if version == revision { report(error) } }
+    }
+    func download(_ song: Song) async {
+        guard downloading == nil, let api, let account else { return }
+        let version = revision; downloading = song.id; defer { downloading = nil }
+        do {
+            let url = try await api.mediaURL("stream", id: song.id)
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".audio")
+            defer { try? FileManager.default.removeItem(at: temp); downloadTask = nil }
+            let wifiOnly = UserDefaults.standard.bool(forKey: "wifiOnly")
+            let task = Task { try await AudioDownload.save(url, to: temp, wifiOnly: wifiOnly) }; downloadTask = task
+            try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            guard version == revision else { return }
+            let destination = try DeviceStorage.audio(song, account)
+            if !FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.moveItem(at: temp, to: destination) }
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: destination.path)
+            offline.removeAll { $0.id == song.id }; offline.append(song); try DeviceStorage.saveIndex(offline, account)
+        } catch { if version == revision { report(error) } }
+    }
+    func removeDownload(_ song: Song) {
+        guard let account else { return }
+        do { try FileManager.default.removeItem(at: DeviceStorage.audio(song, account)); offline.removeAll { $0.id == song.id }; try DeviceStorage.saveIndex(offline, account) }
+        catch { report(error) }
+    }
+    func refreshImport() {
+        guard let api, !importBusy else { return }; importTask?.cancel(); let version = revision
+        importTask = Task {
+            do {
+                repeat {
+                    let job = try await api.currentImport(); try Task.checkCancellation()
+                    guard version == revision else { return }; importJob = job; importError = nil
+                    if job?.active != true { break }; try await Task.sleep(for: .seconds(3))
+                } while !Task.isCancelled
+            } catch { if !Task.isCancelled && version == revision { importError = (error as? MusicError)?.localizedDescription ?? "Нет связи с сервером переноса" } }
+        }
+    }
+    func submitImport(_ token: String) async {
+        guard let api, !importBusy else { return }; let version = revision
+        importTask?.cancel(); importBusy = true; defer { importBusy = false }
+        do {
+            let job = try await api.submitImport(token, resume: importJob?.resumable == true ? importJob?.id : nil)
+            guard version == revision else { return }; importJob = job; importError = nil
+            Task { await Task.yield(); refreshImport() }
+        } catch { if version == revision { importError = (error as? MusicError)?.localizedDescription ?? "Не удалось запустить перенос" } }
+    }
+    func cancelImport() async {
+        guard let api, let id = importJob?.id, !importBusy else { return }; let version = revision
+        importTask?.cancel(); importBusy = true; defer { importBusy = false }
+        do { let job = try await api.cancelImport(id); if version == revision { importJob = job; Task { await Task.yield(); refreshImport() } } }
+        catch { if version == revision { report(error) } }
+    }
+    func upload(_ file: URL, server: String, username: String, password: String) async {
+        guard !uploading, let api else { return }; uploading = true; let version = revision
+        defer { uploading = false }
+        let access = file.startAccessingSecurityScopedResource(); defer { if access { file.stopAccessingSecurityScopedResource() } }
+        do { try await api.upload(file, server: server, username: username, password: password)
+            if version == revision { message = "Файл на сервере. Он появится после сканирования музыкальной библиотеки" }
+        } catch { if version == revision { report(error) } }
+    }
+}

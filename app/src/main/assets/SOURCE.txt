@@ -1,0 +1,12 @@
+DedSec Music
+Copyright 2026 Dedseckms
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This application is free software under the GNU General Public License,
+version 3 or any later version. The full license accompanies this package.
+
+Corresponding application source and build instructions:
+https://github.com/Dedseckms/Dedsec-Music
+https://github.com/Dedseckms/Dedsec-Music/releases
+
+Third-party components retain their respective copyright notices and licenses.

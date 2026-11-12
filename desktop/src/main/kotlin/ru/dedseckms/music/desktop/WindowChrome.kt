@@ -1,7 +1,6 @@
 package ru.dedseckms.music.desktop
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -20,7 +19,7 @@ import androidx.compose.ui.unit.sp
     Row(Modifier.fillMaxWidth().height(38.dp).background(MaterialTheme.colorScheme.background.copy(alpha = .72f)), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
             dragArea {
-                Row(Modifier.fillMaxWidth().fillMaxHeight().combinedClickable(onClick = {}, onDoubleClick = maximize).padding(horizontal = 19.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().fillMaxHeight().padding(horizontal = 19.dp), verticalAlignment = Alignment.CenterVertically) {
                     BrandIcon(Modifier.size(21.dp))
                     Spacer(Modifier.width(10.dp)); Text("DedSec Music", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

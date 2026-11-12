@@ -3,7 +3,7 @@
 Проверено7 ноября2026 года. Это отчёт об исходниках и изолированных тестах,
 а не утверждение о развёртывании на чьём-либо сервере.
 
-- Python3.11 / Pillow13.0.0 / yandex-music3.2.2:40 regression tests,
+- Python3.11 / Pillow13.0.0 / yandex-music3.2.2:42 regression tests,
   все прошли, один Unix dirfd test пропущен на Windows. Проверяются native JWT,
   ограничения upload/avatar, actual/chunked byte limits, no-overwrite, private
   playlists, исходный порядок/повторы, lost-response resume, manual edit guards,

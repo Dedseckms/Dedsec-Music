@@ -4,7 +4,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.*
-import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.foundation.layout.Box
 import kotlinx.coroutines.*
 
@@ -21,8 +20,9 @@ fun main(args: Array<String>) {
     Window(onCloseRequest = ::exitApplication, state = state, title = "DedSec Music", undecorated = true, icon = painterResource("app-icon.png")) {
         window.minimumSize = java.awt.Dimension(960, 600)
         Box {
-            DesktopApp(controller, dragArea = { content -> WindowDraggableArea { content() } }, maximized = state.placement == WindowPlacement.Maximized,
-                minimize = { state.isMinimized = true }, maximize = { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, close = ::exitApplication)
+            val toggleMaximize = { state.placement = if (state.placement == WindowPlacement.Floating) WindowPlacement.Maximized else WindowPlacement.Floating }
+            DesktopApp(controller, dragArea = { content -> WindowDragArea(state, toggleMaximize) { content() } }, maximized = state.placement != WindowPlacement.Floating,
+                minimize = { state.isMinimized = true }, maximize = toggleMaximize, close = ::exitApplication)
             WindowResizeEdges(state.placement == WindowPlacement.Floating)
         }
         LaunchedEffect(Unit) {

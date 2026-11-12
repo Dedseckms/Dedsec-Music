@@ -41,13 +41,16 @@ class Native:
         self.username=user['userName']
 
     def pages(self,path,limit=100_000):
-        result=[]
-        for offset in range(0,limit,1000):
+        count=0
+        for offset in range(0,limit+1,1000):
             check_cancel(self.event)
             rows=native(self.token,path+('?'+urllib.parse.urlencode({'_start':offset,'_end':offset+1000,'_sort':'id','_order':'ASC'})))
             if not isinstance(rows,list) or len(rows)>1000:raise ImportFailure('SOURCE_UNAVAILABLE')
-            result.extend(rows)
-            if len(rows)<1000:return result
+            for row in rows:
+                count+=1
+                if count>limit:raise ImportFailure('SOURCE_LIMIT')
+                yield row
+            if len(rows)<1000:return
         raise ImportFailure('SOURCE_LIMIT')
 
     def songs(self,paths):

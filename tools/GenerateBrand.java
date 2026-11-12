@@ -60,6 +60,11 @@ class GenerateBrand {
             svg.append("/>\n");
         }
         g.dispose();svg.append("</svg>\n");Files.createDirectories(Path.of("branding"));Files.writeString(Path.of("branding/icon.svg"),svg);
+        var iosIcon = new BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB);
+        var iosGraphics = iosIcon.createGraphics(); iosGraphics.setColor(color(background)); iosGraphics.fillRect(0, 0, 1024, 1024);
+        iosGraphics.drawImage(master, 0, 0, null); iosGraphics.dispose();
+        var iosPath = Path.of("ios/Resources/Assets.xcassets/AppIcon.appiconset"); Files.createDirectories(iosPath);
+        ImageIO.write(iosIcon, "png", iosPath.resolve("AppIcon.png").toFile());
         int[] sizes={16,24,32,48,64,128,256};var images=new ArrayList<byte[]>();
         for(int size:sizes){var bitmap=new BufferedImage(size,size,BufferedImage.TYPE_INT_ARGB);var graphics=bitmap.createGraphics();graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC);graphics.drawImage(master,0,0,size,size,null);graphics.dispose();var output=new ByteArrayOutputStream();ImageIO.write(bitmap,"png",output);images.add(output.toByteArray());}
         var png=images.get(images.size()-1);Files.write(Path.of("branding/app-icon.png"),png);Files.write(Path.of("desktop/src/main/resources/app-icon.png"),png);

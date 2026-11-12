@@ -1,0 +1,58 @@
+[
+  {
+    "file": "vlc-3.0.24.tar.xz",
+    "url": "https://downloads.videolan.org/videolan/vlc/3.0.24/vlc-3.0.24.tar.xz",
+    "bytes": 27620304,
+    "sha256": "e7cab503d1d7d5849b89d2cf0e1ee60d0ef6d012407791b644b9cfc0cc225fdf",
+    "notes": "VLC3.0.24; COPYING GPL2 + COPYING.LIB LGPL2.1; contrib recipes/patches in archive",
+    "hashProvenance": "local SHA256 of official pinned upstream download; matches official .sha256"
+  },
+  {
+    "file": "corretto-21-6d1c3f4.tar.gz",
+    "url": "https://codeload.github.com/corretto/corretto-21/tar.gz/6d1c3f4e52aead2b7eac53cbb0d1734af4d5b8be",
+    "bytes": 114492391,
+    "sha256": "379ff5504d9bb0b801d68c724bfcee914a926efe09d3c8b0da5e49431bd20174",
+    "notes": "Corretto21.0.13.0.11 Java21.0.13+11-LTS; GPL2 with Classpath/assembly exception; full OpenJDK source",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  },
+  {
+    "file": "vlcj-f062cb7.tar.gz",
+    "url": "https://codeload.github.com/caprica/vlcj/tar.gz/f062cb7d43b3a657ad368ba2b4a9cae303b2898a",
+    "bytes": 287728,
+    "sha256": "40f9ac82326300569df4035cd60a4dad948cd5022b97c232228ec10f3b54cb0d",
+    "notes": "vlcj4.12.1; GPL3orLater doc/README.LICENSE",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  },
+  {
+    "file": "vlcj-natives-c1582b1.tar.gz",
+    "url": "https://codeload.github.com/caprica/vlcj-natives/tar.gz/c1582b137944578ee33e01aee20bed3a668127a6",
+    "bytes": 54875,
+    "sha256": "13b47cd9f7a240d71d01bb90b1aaeba079983b87194e8b5dfc497e54983b34ea",
+    "notes": "vlcj-natives4.12.0; GPL3orLater doc/README.LICENSE",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  },
+  {
+    "file": "skiko-2f62157.tar.gz",
+    "url": "https://codeload.github.com/JetBrains/skiko/tar.gz/2f621572270c28052549ff4678b762c3fea09fa5",
+    "bytes": 15638474,
+    "sha256": "e1e268a3f115d716b29343563b35cdb576fe31b9496af68ecd9fa0004a5baed4",
+    "notes": "Skiko0.9.22.2 Apache2 LICENSE+NOTICE",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  },
+  {
+    "file": "skia-a00c390.tar.gz",
+    "url": "https://codeload.github.com/JetBrains/skia/tar.gz/a00c390e98b1a8741f11774c742ff60d767365ac",
+    "bytes": 68668339,
+    "sha256": "1dd869419d837bd6345915fcf50aa74f338cbc33d70f6b07faf325fefd3402ed",
+    "notes": "Skia m132-a00c390e98-1 BSD3 + third-party notices; DEPS pinned external code",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  },
+  {
+    "file": "skia-pack-win-release.zip",
+    "url": "https://github.com/JetBrains/skia-pack/releases/download/m132-a00c390e98-1/Skia-m132-a00c390e98-1-windows-Release-x64.zip",
+    "bytes": 36371553,
+    "sha256": "9e732386f8db335c401daddab8cac923b68b3f52ef542abebf33b125b7ddeccc",
+    "notes": "Reference build package with8 upstream third-party notices; NOT source archive",
+    "hashProvenance": "local SHA256 of official pinned upstream download"
+  }
+]

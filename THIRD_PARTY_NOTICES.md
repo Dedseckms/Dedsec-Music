@@ -12,7 +12,7 @@
 | Amazon Corretto 21 | GPL-2.0 with Classpath exception and component notices | https://github.com/corretto/corretto-21 |
 | JSON-java 20250107 | Public domain | https://github.com/stleary/JSON-java |
 
-Original notices remain in the bundled JARs, `runtime/legal/` and `app/resources/vlc/`. Local portable packages include the application license and this notice. Before public binary distribution, supply corresponding source and complete third-party license notices alongside the release. Upstream links alone do not replace distribution obligations. This working copy has not published a binary release.
+Original notices remain in the bundled JARs, `runtime/legal/` and `app/resources/vlc/`. Windows packages also carry the collected copyright, license and notice texts in `licenses/`, including Skiko, Skia and vlcj notices absent from their runtime JARs. Corresponding source archives for redistributed native components accompany the release; exact revisions are listed in `licenses/windows/README.md` in the source tree.
 
 The Windows installer is built with Inno Setup 7.1.1 (Copyright Jordan Russell and Martijn Laan), https://jrsoftware.org/ and https://github.com/jrsoftware/issrc . Its original setup engine notices are retained. The compiler is a local build tool and is not installed with DedSec Music.
 

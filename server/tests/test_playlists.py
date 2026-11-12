@@ -104,5 +104,20 @@ class PlaylistTests(unittest.TestCase):
         native.pages=lambda path:[{'id':value,'libraryId':1,'path':'yandex/1.mp3'} for value in ['a','b']]
         with self.assertRaises(ImportFailure):native.songs(['yandex/1.mp3'])
 
+    def test_native_pages_yield_before_fetching_next_batch(self):
+        native=object.__new__(playlists.Native);native.token='private';native.event=fixtures.FastEvent()
+        first=[{'id':str(i)} for i in range(1000)]
+        with patch.object(playlists,'native',side_effect=[first,[{'id':'last'}]]) as request:
+            rows=native.pages('/api/song');self.assertEqual(next(rows),{'id':'0'})
+            self.assertEqual(request.call_count,1)
+            self.assertEqual(len(list(rows)),1000);self.assertEqual(request.call_count,2)
+
+    def test_indexing_poll_budget_fails_pending_instead_of_false_completion(self):
+        with self.harness.manager() as m:
+            self.prepare(m);FakeNative.indexed=False;key=self.harness.schedule(m)
+            with m.db() as db:db.execute('UPDATE jobs SET index_attempts=19 WHERE id=?',(key,))
+            m.run_job(key);value=m.view('user-a',key)
+            self.assertEqual((value['state'],value['pendingPlaylistCount']),('failed',1))
+
 
 if __name__=='__main__':unittest.main()
