@@ -4,6 +4,10 @@
   <p><strong>Музыка живёт на твоём сервере. Плейлисты, настроение и оформление — твои.</strong></p>
 
   <p>
+    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/latest"><img alt="Скачать" src="https://img.shields.io/badge/Скачать-Android_и_Windows-A8C7FA?style=for-the-badge&amp;labelColor=182231" /></a>
+  </p>
+
+  <p>
     <a href="LICENSE"><img alt="GPL v3 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-A8C7FA?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Android 8+" src="https://img.shields.io/badge/Android-8.0%2B-C4E7D4?style=flat-square&amp;labelColor=182231" />
     <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-A8C7FA?style=flat-square&amp;labelColor=182231" />
@@ -17,7 +21,7 @@
 
 DedSec Music — открытый музыкальный клиент для Android и Windows. Подключи Navidrome, собери любимую коллекцию и слушай её дома, в дороге и без интернета. На одном сервере можно жить с друзьями: аудиотека общая, а плейлисты и избранное у каждого свои.
 
-**Сейчас опубликован исходный код. Готовые установщики и APK в Releases пока не выпускались.** Нативный iPhone-клиент готовится для [установки через AltStore](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
+[**Скачать Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) Нативный iPhone-клиент готовится для [установки через AltStore](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
 
 ## Интерфейс
 
@@ -53,7 +57,7 @@ DedSec Music — открытый музыкальный клиент для And
 
 ## С чего начать
 
-1. Есть Navidrome? [Собери клиент](docs/BUILDING.md), введи HTTPS-адрес сервера, логин и пароль.
+1. Есть Navidrome? [Скачай клиент](https://github.com/Dedseckms/Dedsec-Music/releases/latest) или [собери из исходников](docs/BUILDING.md), введи HTTPS-адрес сервера, логин и пароль.
 2. Нужен весь комплект? Разверни [сервер с пошаговыми скриптами](server/README.md).
 3. Хочешь забрать свою коллекцию? Во вкладке **«Добавить»** открой карточку **«Из Яндекс Музыки»**. [Где получить токен →](docs/YANDEX_IMPORT.md#получить-токен)
 
