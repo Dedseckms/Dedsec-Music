@@ -302,7 +302,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     private fun onEnded() {
         if (queue.move(true, state.value.repeat)) playCurrent()
-        else if (state.value.wave) wave(keep = true)
+        else if (state.value.wave) { mutable.update { it.copy(ended = true) }; wave(keep = true) }
         else mutable.update { it.copy(ended = true) }
     }
     fun toggle() { invalidateMix(); if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }

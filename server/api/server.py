@@ -19,6 +19,7 @@ import uuid
 import audio
 import profile_api as profile
 import yandex_import
+import radio
 
 STORAGE = Path(os.environ.get('STORAGE_ROOT', '/storage')).resolve()
 LIBRARY = STORAGE / 'library'
@@ -196,5 +197,8 @@ if __name__ == '__main__':
     if STAGING.stat().st_dev != LIBRARY.stat().st_dev:
         raise RuntimeError('Staging/library must be on the same filesystem')
     IMPORTER=yandex_import.Manager(profile.BASE,STORAGE)
+    RADIO=radio.from_environment(audio.UPLOAD)
     try:Server(('0.0.0.0', 8080), Handler).serve_forever(poll_interval=1)
-    finally:IMPORTER.close()
+    finally:
+        if RADIO is not None:RADIO.index.close()
+        IMPORTER.close()

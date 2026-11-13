@@ -12,7 +12,7 @@
 | Amazon Corretto 21 | GPL-2.0 with Classpath exception and component notices | https://github.com/corretto/corretto-21 |
 | JSON-java 20250107 | Public domain | https://github.com/stleary/JSON-java |
 
-Original notices remain in the bundled JARs, `runtime/legal/` and `app/resources/vlc/`. Windows packages also carry the collected copyright, license and notice texts in `licenses/`, including Skiko, Skia and vlcj notices absent from their runtime JARs. Corresponding source archives for redistributed native components accompany the release; exact revisions are listed in `licenses/windows/README.md` in the source tree.
+Original notices remain in the bundled JARs, `runtime/legal/` and `app/resources/vlc/`. Windows packages also carry the collected copyright, license and notice texts in `licenses/`, including Skiko, Skia and vlcj notices absent from their runtime JARs. Corresponding source archives for redistributed native components are linked with pinned checksums in `DEPENDENCY-SOURCES.md`; exact revisions are listed in `licenses/windows/README.md` in the source tree.
 
 This software is based in part on the work of the Independent JPEG Group.
 

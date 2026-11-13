@@ -9,7 +9,7 @@ foreach ($required in @('DedSec Music.exe', 'runtime/bin/java.dll', 'app/resourc
 }
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $applicationPath '.dedsec-install') -Value 'DedSec Music portable v1' -Encoding ASCII
-foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $projectPath $notice) -Destination $applicationPath -Force }
+foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'DEPENDENCY-SOURCES.md')) { Copy-Item -LiteralPath (Join-Path $projectPath $notice) -Destination $applicationPath -Force }
 New-Item -ItemType Directory -Path (Join-Path $applicationPath 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectPath 'licenses/windows') -Destination (Join-Path $applicationPath 'licenses') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $projectPath 'docs/WINDOWS.md') -Destination (Join-Path $applicationPath 'README.md') -Force

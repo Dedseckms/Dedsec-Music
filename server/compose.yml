@@ -48,11 +48,14 @@ services:
       NAV_URL: http://navidrome:4533
       STORAGE_ROOT: /storage
       STATE_ROOT: /state
+      NAV_DB_PATH: /nav-data/navidrome.db
+      RADIO_LIBRARY_MAP: '{"1":"/storage/library"}'
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./data/music:/storage
       - ./data/api:/state
+      - ./data/navidrome:/nav-data:ro
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
       interval: 30s

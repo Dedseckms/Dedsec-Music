@@ -170,7 +170,7 @@ import MusicCore
         }
     }
     func toggle() { if playing || buffering { pause() } else { resume() } }
-    func resume() { guard now != nil else { return }; if player.currentItem == nil, let index = queue.current { select(index); return }; player.play(); updatePlayback() }
+    func resume() { invalidateMix(); guard now != nil else { return }; if player.currentItem == nil, let index = queue.current { select(index); return }; player.play(); updatePlayback() }
     func pause() { invalidateMix(); player.pause(); playTask?.cancel(); buffering = false; updatePlayback() }
     func seek(_ seconds: Double) { player.seek(to: CMTime(seconds: max(0, min(duration, seconds)), preferredTimescale: 600)); position = seconds }
     func skip(_ forward: Bool) {
@@ -188,6 +188,7 @@ import MusicCore
         if repeated { seek(0); player.play() }
         else if let index = queue.step(true) { select(index) }
         else if let waveMood {
+            player.pause(); seek(0); updatePlayback()
             let token = mixRevision; let version = revision
             Task { if token == mixRevision && version == revision { await wave(waveMood, favoritesOnly: waveFavoritesOnly) } }
         }

@@ -5,7 +5,7 @@
 ## Установка с Windows
 
 1. Установи AltServer и AltStore Classic по [официальной инструкции для Windows](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows). Используй указанные там версии iTunes и iCloud.
-2. Скачай [`DedSec-Music-0.1.0-ios-unsigned.ipa`](https://github.com/Dedseckms/Dedsec-Music/releases/download/ios-v0.1.0/DedSec-Music-0.1.0-ios-unsigned.ipa) из [выпуска iPhone Preview](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.0).
+2. Скачай [`DedSec-Music-0.1.1-ios-unsigned.ipa`](https://github.com/Dedseckms/Dedsec-Music/releases/download/ios-v0.1.1/DedSec-Music-0.1.1-ios-unsigned.ipa) из [выпуска iPhone Preview](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.1).
 3. Открой IPA через AltStore. AltStore подпишет приложение твоим Apple ID и установит его на телефон. Пароль Apple вводится только в установленный AltStore/AltServer; музыкальному серверу он не нужен.
 4. В DedSec Music введи HTTPS-адрес своего Navidrome, логин и пароль музыкального аккаунта. Для загрузки файлов используется отдельный аккаунт загрузчика.
 
@@ -27,4 +27,4 @@ xcodebuild -project ios/DedSecMusic.xcodeproj -scheme DedSecMusic \
 
 Логин по желанию сохраняется в Keychain. Токен Яндекса хранится в оперативной памяти и отправляется только своему серверу. Задача импорта продолжает выполняться на сервере после закрытия приложения. Офлайн-копии разделены по музыкальным аккаунтам.
 
-В первой версии оформление использует SwiftUI и системные материалы iOS. Рекомендации основаны на тегах собственной библиотеки. Работа на физическом iPhone проверяется отдельно от успешной сборки.
+Оформление использует SwiftUI и системные материалы iOS. Волна подбирается серверным дополнением по доступной библиотеке, истории и результатам фонового анализа звука. В настройках администратора доступны пользователи и их загрузки. Работа на физическом iPhone проверяется отдельно от успешной сборки.

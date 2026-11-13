@@ -246,6 +246,9 @@ def dispatch(handler, chunks):
     parsed = urllib.parse.urlsplit(handler.path)
     if not parsed.path.startswith(PREFIX + "/"):
         return None
+    if parsed.path.startswith(PREFIX + "/radio/"):
+        import radio
+        return radio.dispatch(handler, chunks)
     status = 500
     try:
         if parsed.path not in (PREFIX + "/me", PREFIX + "/avatar"):

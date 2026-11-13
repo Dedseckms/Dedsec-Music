@@ -9,7 +9,7 @@ foreach ($required in @('DedSec Music.exe', 'runtime/bin/java.dll', 'app/resourc
 & (Join-Path $PSScriptRoot 'prepare-installer.ps1')
 & (Join-Path $PSScriptRoot 'generate-installer-art.ps1')
 Set-Content -LiteralPath (Join-Path $payloadPath '.dedsec-install') -Value 'DedSec Music portable v1' -Encoding ASCII
-foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $projectPath $notice) -Destination $payloadPath -Force }
+foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'DEPENDENCY-SOURCES.md')) { Copy-Item -LiteralPath (Join-Path $projectPath $notice) -Destination $payloadPath -Force }
 New-Item -ItemType Directory -Path (Join-Path $payloadPath 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectPath 'licenses/windows') -Destination (Join-Path $payloadPath 'licenses') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $projectPath 'docs/WINDOWS.md') -Destination (Join-Path $payloadPath 'README.md') -Force

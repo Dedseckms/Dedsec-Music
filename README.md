@@ -11,7 +11,7 @@
     <a href="LICENSE"><img alt="GPL v3 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-A8C7FA?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Android 8+" src="https://img.shields.io/badge/Android-8.0%2B-C4E7D4?style=flat-square&amp;labelColor=182231" />
     <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-A8C7FA?style=flat-square&amp;labelColor=182231" />
-    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.0"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
+    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.1"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Material 3" src="https://img.shields.io/badge/design-Material_3-D0BCFF?style=flat-square&amp;labelColor=182231" />
   </p>
 
@@ -22,7 +22,7 @@
 
 DedSec Music — открытый музыкальный клиент для Android и Windows. Подключи Navidrome, собери любимую коллекцию и слушай её дома, в дороге и без интернета. На одном сервере можно жить с друзьями: аудиотека общая, а плейлисты и избранное у каждого свои.
 
-[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.0). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
+[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.1). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
 
 ## Интерфейс
 
