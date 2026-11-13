@@ -245,6 +245,7 @@ def dispatch(handler, chunks):
                 else: raise AdminError(405, 'METHOD_NOT_ALLOWED')
             finally: LOCK.release()
         else: raise AdminError(405, 'METHOD_NOT_ALLOWED')
+        if len(json.dumps(value,separators=(',',':')).encode())>512*1024:raise AdminError(503,'RESPONSE_LIMIT')
         profile.send(handler, 200, value); return 200
     except profile.ProfileError as error:
         profile.send(handler, error.status, {'error': {'code': 'AUTH_REQUIRED'}}); return error.status
