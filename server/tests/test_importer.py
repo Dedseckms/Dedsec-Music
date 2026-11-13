@@ -171,4 +171,20 @@ class ImportTests(unittest.TestCase):
             self.assertEqual((value['state'],value['unavailable'],value['downloaded'],value['processed']),('completed',0,2,2))
             self.assertEqual(FakeProvider.calls.count('2'),1)
 
+    def test_account_revoked_during_download_cannot_publish_or_resume(self):
+        with self.manager() as m:
+            key=self.schedule(m)
+            original=FakeProvider.download
+            def revoked(provider,source_id,path):
+                result=original(provider,source_id,path)
+                m.account_guard=lambda user:False
+                return result
+            with patch.object(FakeProvider,'download',revoked):m.run_job(key)
+            self.assertEqual(m.view('user-a',key)['state'],'paused_auth')
+            self.assertEqual(list((m.library/'yandex').glob('*')),[])
+            with self.assertRaises(ImportFailure):self.schedule(m,key=key)
+            m.cancel_uid('user-a')
+            self.assertEqual(m.view('user-a',key)['state'],'cancelled')
+            self.assertNotIn(key,m.credentials)
+
 if __name__=='__main__':unittest.main()

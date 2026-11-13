@@ -77,7 +77,7 @@ def authenticate(headers):
     user, _ = native(token, "/api/user/" + uid)
     if user.get("id") != uid or user.get("userName") != username:
         raise ProfileError(401)
-    return {"id": uid, "token": token}
+    return {"id": uid, "token": token, "username": user["userName"], "isAdmin": user.get("isAdmin") is True}
 
 
 def directory(uid, create=False):
@@ -121,7 +121,7 @@ def me(identity):
     version = hashlib.sha256(data).hexdigest() if data else ""
     return {"userId": identity["id"], "avatarVersion": version,
             "avatarUrl": PREFIX + "/avatar?v=" + version if version else "",
-            "librarySongCount": library_count(identity)}
+            "librarySongCount": library_count(identity), "isAdmin": identity.get("isAdmin") is True}
 
 
 def image_limits():
@@ -246,6 +246,9 @@ def dispatch(handler, chunks):
     parsed = urllib.parse.urlsplit(handler.path)
     if not parsed.path.startswith(PREFIX + "/"):
         return None
+    if parsed.path.startswith(PREFIX + "/admin/"):
+        import admin_api
+        return admin_api.dispatch(handler, chunks)
     if parsed.path.startswith(PREFIX + "/radio/"):
         import radio
         return radio.dispatch(handler, chunks)

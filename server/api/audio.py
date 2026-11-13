@@ -195,7 +195,7 @@ def publish_file(temporary, publish, name, validator=validate, identifier=None):
     return duration
 
 
-def receive(chunks, staging, publish, name, disk_usage=shutil.disk_usage, validator=validate):
+def receive(chunks, staging, publish, name, disk_usage=shutil.disk_usage, validator=validate, identifier=None):
     if disk_usage(staging).free < RESERVE + MAX_BYTES:
         raise Rejected(507)
     parent = safe_directory(publish)
@@ -220,7 +220,7 @@ def receive(chunks, staging, publish, name, disk_usage=shutil.disk_usage, valida
             os.fsync(output.fileno())
         if not count:
             raise Rejected(415)
-        duration = publish_file(temporary, publish, name, validator)
+        duration = publish_file(temporary, publish, name, validator, identifier=identifier)
         return count, duration
     finally:
         if temporary is not None:

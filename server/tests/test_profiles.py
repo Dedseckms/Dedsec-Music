@@ -17,7 +17,7 @@ class ProfileTests(unittest.TestCase):
     def test_library_total_uses_native_header_not_scan_progress(self):
         with patch.object(profile,'read_avatar',return_value=b''),patch.object(profile,'native',return_value=([{'id':'one'}],{'X-Total-Count':'10599'})) as native:
             result=profile.me({'id':'current','token':'private'})
-        self.assertEqual(result,{'userId':'current','avatarVersion':'','avatarUrl':'','librarySongCount':10599})
+        self.assertEqual(result,{'userId':'current','avatarVersion':'','avatarUrl':'','librarySongCount':10599,'isAdmin':False})
         native.assert_called_once_with('private','/api/song?_start=0&_end=1',cap=1024*1024)
 
     def test_real_body_over5mb_retains_existing_avatar_without_worker(self):

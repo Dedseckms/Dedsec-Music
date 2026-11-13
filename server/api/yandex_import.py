@@ -72,6 +72,7 @@ class Manager:
         if self.path.is_symlink():raise RuntimeError('Importer database must be a regular private file')
         self.credentials={};self.events={};self.provider_factory=provider_factory;self.worker=None;self.worker_lock=None
         self.publisher=publisher
+        self.account_guard=lambda user: True
         self.playlist_client=playlist_client
         if start_worker:
             import fcntl
@@ -140,6 +141,7 @@ class Manager:
                 'pendingPlaylistCount':lists['pending'],'missingPlaylistTracks':missing}
 
     def schedule(self,identity,token,key=None):
+        self.verify_account({'uid':identity['id'],'native':identity['token']})
         if not isinstance(token,str) or not 8<=len(token)<=8192 or any(ord(c)<33 or ord(c)>126 for c in token):raise ApiError(400,'INVALID_TOKEN')
         source.check_space(self.root,10*2**20)
         uid=identity['id']
@@ -172,6 +174,17 @@ class Manager:
             self.events.setdefault(key,threading.Event()).set()
             if not running:self.credentials.pop(key,None)
         self.wake.set();return self.view(uid,key)
+
+    def cancel_uid(self,uid):
+        with self.lock:
+            with self.db() as db:
+                keys=[r[0] for r in db.execute("SELECT id FROM jobs WHERE uid=? AND state IN ('queued','running','cancelling','paused_auth')",(uid,))]
+            for key in keys:self.cancel(uid,key)
+
+    def verify_account(self,credentials):
+        current,_=profile.native(credentials['native'],'/api/user/'+credentials['uid'])
+        if current.get('id')!=credentials['uid'] or not self.account_guard(current):raise ImportFailure('AUTH_REQUIRED')
+        return current
 
     def _retry(self,operation,event):
         for attempt in range(2):
@@ -229,8 +242,7 @@ class Manager:
             # Intent is durable before publication, allowing crash recovery by exact hash.
             with self.lock:
                 check_cancel(event);source.check_space(self.library)
-                current,_=profile.native(credentials['native'],'/api/user/'+credentials['uid'])
-                if current.get('id')!=credentials['uid']:raise ImportFailure('AUTH_REQUIRED')
+                self.verify_account(credentials)
                 with self.db() as db:
                     db.execute('INSERT OR REPLACE INTO downloads(id,path,bytes,sha,seconds,origin) VALUES(?,?,?,?,?,?)',(key,'yandex/'+key+suffix,size,checksum,seconds,'published'))
                 try:self.publisher(temporary,folder/(key+suffix))
@@ -252,8 +264,7 @@ class Manager:
             if row['state']!='queued':return
             credentials=dict(credentials,uid=row['uid'])
             check_cancel(event);self.update(key,state='running',phase='inventory',error=None)
-            current,_=profile.native(credentials['native'],'/api/user/'+credentials['uid'])
-            if current.get('id')!=credentials['uid']:raise ImportFailure('AUTH_REQUIRED')
+            self.verify_account(credentials)
             provider=self._retry(lambda:self.provider_factory(credentials['oauth'],event),event)
             if row['account_hash'] and row['account_hash']!=provider.account_hash:raise ImportFailure('AUTH_REQUIRED')
             self.update(key,account_hash=provider.account_hash)

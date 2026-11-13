@@ -100,7 +100,8 @@ class AudioTests(unittest.TestCase):
     def test_every_user_reauthenticates_and_uses_uuid_scope(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
-            def receive(chunks,stage,folder,name,validator):
+            def receive(chunks,stage,folder,name,validator,identifier):
+                self.assertRegex(identifier,r'^[0-9a-f]{32}$')
                 validator(Path('fake-audio'));self.assertNotIn('owner',str(folder));self.assertEqual(name,'original.mp3');return 10,1
             with patch.object(server,'LIBRARY',root),patch.object(audio,'safe_directory',return_value=3),patch.object(audio.os,'close'), \
                     patch.object(audio,'receive',side_effect=receive),patch.object(audio,'validate',return_value=1), \

@@ -20,6 +20,7 @@ import audio
 import profile_api as profile
 import yandex_import
 import radio
+import admin_api
 
 STORAGE = Path(os.environ.get('STORAGE_ROOT', '/storage')).resolve()
 LIBRARY = STORAGE / 'library'
@@ -77,11 +78,14 @@ def login(query, headers):
     # The same native verification is required for uploader and profile requests.
     from email.message import Message
     auth = Message(); auth['Authorization'] = 'Bearer ' + token
-    profile.authenticate(auth)
+    identity = profile.authenticate(auth)
+    if admin_api.SERVICE and admin_api.SERVICE.native_blocked(identity['id'],identity['username']):
+        raise profile.ProfileError(401)
     return token.encode()
 
 
 def upload(identity, query, chunks):
+    if admin_api.SERVICE: admin_api.SERVICE.identity(identity)
     name = audio.filename(query)
     if not audio.UPLOAD.acquire(blocking=False):
         raise audio.Rejected(429)
@@ -94,11 +98,14 @@ def upload(identity, query, chunks):
             fd = audio.safe_directory(directory); os.close(fd)
         def validate(path):
             duration = audio.validate(path)
+            if admin_api.SERVICE: admin_api.SERVICE.identity(identity)
             current, _ = profile.native(identity['token'], '/api/user/' + identity['id'])
             if current.get('id') != identity['id']:
                 raise profile.ProfileError(401)
             return duration
-        size, seconds = audio.receive(chunks, STAGING, folder, name, validator=validate)
+        publication = uuid.uuid4().hex
+        size, seconds = audio.receive(chunks, STAGING, folder, name, validator=validate, identifier=publication)
+        if admin_api.SERVICE: admin_api.SERVICE.record(identity, folder / publication / name, name, size)
         return {'status': 'accepted', 'name': name, 'bytes': size, 'duration': seconds}
     finally:
         audio.UPLOAD.release()
@@ -159,7 +166,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 status = 200; self.result(status, result)
             else:
                 raise profile.ProfileError(405)
-        except (profile.ProfileError, audio.Rejected) as error:
+        except (profile.ProfileError, audio.Rejected, admin_api.AdminError) as error:
             status = error.status; self.result(status, {'error': 'request_rejected'})
         except (OSError, ValueError, TypeError, KeyError):
             status = 503
@@ -198,6 +205,9 @@ if __name__ == '__main__':
         raise RuntimeError('Staging/library must be on the same filesystem')
     IMPORTER=yandex_import.Manager(profile.BASE,STORAGE)
     RADIO=radio.from_environment(audio.UPLOAD)
+    ACCOUNTS=admin_api.configure(profile.BASE, os.environ.get('NAV_DB_PATH', '/nav-data/navidrome.db'), LIBRARY,
+                        imports=IMPORTER.path, cancel=IMPORTER.cancel_uid)
+    IMPORTER.account_guard=lambda user: not ACCOUNTS.native_blocked(user['id'],user['userName'])
     try:Server(('0.0.0.0', 8080), Handler).serve_forever(poll_interval=1)
     finally:
         if RADIO is not None:RADIO.index.close()
