@@ -32,13 +32,44 @@ enum DeviceStorage {
         var mutable = root; try mutable.setResourceValues(values)
         return root
     }
-    static func offline(_ account: Credentials) -> [Song] {
-        guard let root = try? folder(account), let data = try? Data(contentsOf: root.appendingPathComponent("offline.json")),
-              let songs = try? JSONDecoder().decode([Song].self, from: data) else { return [] }
-        return songs.filter { FileManager.default.fileExists(atPath: root.appendingPathComponent(hash($0.id) + ".mp3").path) }
+    private static func records(_ name: String, _ account: Credentials) throws -> URL {
+        let path = try folder(account).appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        return path
     }
-    static func saveIndex(_ songs: [Song], _ account: Credentials) throws {
-        try JSONEncoder().encode(songs).write(to: folder(account).appendingPathComponent("offline.json"), options: .atomic)
+    private static func readRecords(_ name: String, _ account: Credentials) -> [Song] {
+        guard let path = try? records(name, account), let files = try? FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: nil) else { return [] }
+        return files.filter { $0.pathExtension == "json" }.compactMap { url in guard let data = try? Data(contentsOf: url) else { return nil }; return try? JSONDecoder().decode(Song.self, from: data) }
+    }
+    static func offline(_ account: Credentials) -> [Song] {
+        let legacy: [Song] = (try? Data(contentsOf: folder(account).appendingPathComponent("offline.json"))).flatMap { try? JSONDecoder().decode([Song].self, from: $0) } ?? []
+        var seen = Set<String>()
+        return (readRecords("offline-index", account) + legacy).filter { song in
+            guard seen.insert(song.id).inserted, let file = try? audio(song, account), let attributes = try? FileManager.default.attributesOfItem(atPath: file.path), let size = attributes[.size] as? NSNumber else { return false }
+            return size.int64Value > 0
+        }
+    }
+    static func saveDownloaded(_ song: Song, _ account: Credentials) throws {
+        try JSONEncoder().encode(song).write(to: records("offline-index", account).appendingPathComponent(hash(song.id) + ".json"), options: .atomic)
+    }
+    static func removeIndex(_ song: Song, _ account: Credentials) throws {
+        let url = try records("offline-index", account).appendingPathComponent(hash(song.id) + ".json")
+        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+    }
+    static func queued(_ account: Credentials) -> [Song] {
+        readRecords("download-queue", account).filter { song in
+            guard let file = try? audio(song, account) else { return true }
+            if FileManager.default.fileExists(atPath: file.path) { try? finishQueued(song, account); return false }
+            return true
+        }
+    }
+    static func saveQueued(_ songs: [Song], _ account: Credentials) throws {
+        let path = try records("download-queue", account)
+        for song in songs { try JSONEncoder().encode(song).write(to: path.appendingPathComponent(hash(song.id) + ".json"), options: .atomic) }
+    }
+    static func finishQueued(_ song: Song, _ account: Credentials) throws {
+        let file = try records("download-queue", account).appendingPathComponent(hash(song.id) + ".json")
+        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
     }
     static func audio(_ song: Song, _ account: Credentials) throws -> URL { try folder(account).appendingPathComponent(hash(song.id) + ".mp3") }
 }

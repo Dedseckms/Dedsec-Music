@@ -118,7 +118,7 @@ struct SongRows: View {
                     Button("Добавить в плейлист", systemImage: "text.badge.plus") { add(song) }
                     Button(store.favorites.contains { $0.id == song.id } ? "Убрать из любимого" : "Мне нравится", systemImage: "heart") { Task { await store.favorite(song) } }
                     if store.offline.contains(where: { $0.id == song.id }) { Button("Удалить офлайн-копию", systemImage: "trash", role: .destructive) { store.removeDownload(song) } }
-                    else { Button("Скачать на iPhone", systemImage: "arrow.down.circle") { Task { await store.download(song) } }.disabled(store.downloading != nil) }
+                    else { Button("Скачать на iPhone", systemImage: "arrow.down.circle") { Task { await store.download(song) } } }
                     if let artistId = song.artistId { NavigationLink("Открыть исполнителя", value: Route.artist(artistId, song.artist ?? "Исполнитель")) }
                     if let remove { Button("Убрать из плейлиста", systemImage: "minus.circle", role: .destructive) { remove(index) } }
                 } label: { if store.downloading == song.id { ProgressView() } else { Image(systemName: "ellipsis").frame(width: 30, height: 42) } }
@@ -236,6 +236,7 @@ struct DetailView: View {
             if loading { ProgressView("Загружаем") }
             if let error { Text(error).foregroundStyle(.secondary); Button("Повторить") { Task { await load() } } }
             if !songs.isEmpty { Button { store.play(songs, source: title) } label: { Label("Слушать", systemImage: "play.fill") } }
+            if !songs.isEmpty { Button { store.downloadAll(songs) } label: { Label("Скачать список · \(songs.count)", systemImage: "arrow.down.circle") } }
             ForEach(albums) { album in NavigationLink(value: Route.album(album.id, album.name)) { Text(album.name) } }
             SongRows(songs: songs, source: title, remove: playlist == nil ? nil : { index in Task {
                 guard let playlist else { return }; await store.playlistMutation { try await $0.remove(index, from: playlist) }; await load()

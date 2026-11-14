@@ -37,7 +37,7 @@ struct PlayerView: View {
                         Button { Task { await store.favorite(now) } } label: { Image(systemName: store.favorites.contains { $0.id == now.id } ? "heart.fill" : "heart").font(.title3) }
                         Button { add = true } label: { Label("В плейлист", systemImage: "text.badge.plus").font(.subheadline) }.buttonStyle(.bordered)
                         if store.offline.contains(where: { $0.id == now.id }) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary).accessibilityLabel("Скачано") }
-                        else { Button { Task { await store.download(now) } } label: { if store.downloading == now.id { ProgressView() } else { Image(systemName: "arrow.down.circle").font(.title3) } }.disabled(store.downloading != nil) }
+                        else { Button { Task { await store.download(now) } } label: { if store.downloading == now.id { ProgressView() } else { Image(systemName: "arrow.down.circle").font(.title3) } } }
                     }
                 }
                 Spacer(minLength: 0)
@@ -65,12 +65,20 @@ struct SettingsView: View {
                     Picker("Тема", selection: $appearance) { Text("Тёмная").tag("dark"); Text("Светлая").tag("light"); Text("Как в системе").tag("system") }
                     Picker("Акцент", selection: $accent) { Text("Синий").tag("blue"); Text("Сирень").tag("violet"); Text("Мята").tag("mint"); Text("Роза").tag("rose"); Text("Янтарь").tag("amber") }
                 }
-                Section("Офлайн") { Toggle("Скачивать только по Wi-Fi", isOn: $wifiOnly); Text("\(store.offline.count) треков на этом iPhone").foregroundStyle(.secondary) }
+                Section("Офлайн") {
+                    Toggle("Скачивать только по Wi-Fi", isOn: $wifiOnly).onChange(of: wifiOnly) { _, _ in store.downloadNetworkChanged() }
+                    Toggle("Скачивать прослушанное", isOn: Binding(get: { store.autoDownloadListened }, set: { store.autoDownloadListened = $0 }))
+                    Text("После прослушивания 80% трека").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Скачивать любимое", isOn: Binding(get: { store.autoDownloadFavorites }, set: { store.autoDownloadFavorites = $0 }))
+                    Button { store.downloadAll(store.favorites) } label: { Label("Скачать всё любимое", systemImage: "arrow.down.circle") }
+                    Text("\(store.offline.count) на iPhone · \(store.pendingOffline.count) в очереди").foregroundStyle(.secondary)
+                    if store.downloadsPaused { Button("Продолжить очередь скачивания") { store.resumeDownloads() } }
+                }
                 Section("Обновления") {
                     Link(destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/releases")!) { Label("Версии на GitHub", systemImage: "arrow.up.right.square") }
                     Text("Новую IPA установи через AltStore. Бесплатная подпись Apple требует регулярного обновления.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.1").font(.caption).foregroundStyle(.secondary)
+                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.2").font(.caption).foregroundStyle(.secondary)
                     Button("Выйти из аккаунта", role: .destructive) { store.logout(); dismiss() }
                 }
             }.navigationTitle("Настройки").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
