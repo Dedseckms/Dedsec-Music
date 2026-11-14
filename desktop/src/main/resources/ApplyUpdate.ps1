@@ -1,9 +1,20 @@
-param([Parameter(Mandatory)][int]$ProcessId, [Parameter(Mandatory)][string]$InstallRoot, [Parameter(Mandatory)][string]$Archive, [Parameter(Mandatory)][string]$ReadyFile, [switch]$CheckOnly, [switch]$TestFailureAfterSwap)
+param([Parameter(Mandatory)][int]$ProcessId, [Parameter(Mandatory)][string]$InstallRoot, [Parameter(Mandatory)][string]$Archive, [Parameter(Mandatory)][string]$ReadyFile, [string]$ProceedFile, [ValidateRange(1,600)][int]$HandoffTimeoutSeconds = 300, [switch]$CheckOnly, [switch]$TestFailureAfterSwap)
 $ErrorActionPreference = 'Stop'
 $rootPath = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $parentPath = Split-Path $rootPath -Parent
 if ((Split-Path $rootPath -Leaf) -ne 'DedSec Music' -or !(Test-Path -LiteralPath (Join-Path $rootPath '.dedsec-install'))) { throw 'Unexpected install directory.' }
 if ((Get-Item -LiteralPath $rootPath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked installations are not updated automatically.' }
+$workPath = Split-Path ([IO.Path]::GetFullPath($Archive)) -Parent
+if ($workPath -eq $rootPath -or $workPath.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Update staging must be outside the installation.' }
+Set-Location -LiteralPath $workPath
+[Environment]::CurrentDirectory = $workPath
+$lockBytes = [Text.Encoding]::UTF8.GetBytes($rootPath.ToUpperInvariant())
+$lockHash = [Security.Cryptography.SHA256]::Create().ComputeHash($lockBytes)
+$lockName = 'Local\DedSecMusicUpdate-' + ([BitConverter]::ToString($lockHash).Replace('-', ''))
+$mutex = [Threading.Mutex]::new($false, $lockName)
+try { $ownsLock = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsLock = $true }
+if (!$ownsLock) { $mutex.Dispose(); throw 'Another updater is already preparing this installation.' }
+try {
 $stagePath = Join-Path (Split-Path ([IO.Path]::GetFullPath($Archive)) -Parent) ('unpack-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stagePath | Out-Null
 # The archive has already passed signature, exact size and SHA256 verification.
@@ -33,7 +44,16 @@ $failedPath = Join-Path $parentPath ('DedSec Music.failed-' + [guid]::NewGuid().
 if ((Split-Path ([IO.Path]::GetFullPath($failedPath)) -Parent) -ne $parentPath) { throw 'Unexpected recovery target.' }
 $launchReady = Join-Path (Split-Path ([IO.Path]::GetFullPath($Archive)) -Parent) ('launch-ready-' + [guid]::NewGuid().ToString('N'))
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($ReadyFile), 'Ready')
-if (!$TestFailureAfterSwap) { Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue }
+if (!$TestFailureAfterSwap) {
+    if ([string]::IsNullOrWhiteSpace($ProceedFile)) { throw 'Explicit handoff confirmation is required.' }
+    $handoffDeadline = [DateTime]::UtcNow.AddSeconds($HandoffTimeoutSeconds)
+    while (!(Test-Path -LiteralPath $ProceedFile)) {
+        if ([DateTime]::UtcNow -gt $handoffDeadline -or !(Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { throw 'Update handoff was cancelled.' }
+        Start-Sleep -Milliseconds 100
+    }
+    $parentProcess = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $parentProcess) { $parentProcess | Wait-Process -Timeout 180 }
+}
 $oldMoved = $false
 $newMoved = $false
 $newProcess = $null
@@ -59,3 +79,4 @@ try {
     throw
 }
 # Retain backup and failed folders for recovery; user data lives separately.
+} finally { $mutex.ReleaseMutex(); $mutex.Dispose() }

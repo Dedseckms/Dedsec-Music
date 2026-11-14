@@ -15,10 +15,15 @@ import java.util.concurrent.TimeUnit
 
 data class UpdateOffer(val version: String, val url: String, val sha256: String, val size: Long)
 
-class UpdateClient(private val publicKey: ByteArray = UpdateClient::class.java.getResourceAsStream("/update-public-key.der")!!.use { it.readBytes() }) {
-    private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(120, TimeUnit.SECONDS).build()
+class UpdateClient(private val publicKey: ByteArray = UpdateClient::class.java.getResourceAsStream("/update-public-key.der")!!.use { it.readBytes() },
+                   private val client: OkHttpClient = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(30, TimeUnit.SECONDS).build(),
+                   private val downloadRoot: Path = DesktopPaths.root.resolve("updates")) {
+    private val downloadClient = archiveClient(client)
+    @Volatile private var downloadCall: okhttp3.Call? = null
+    @Volatile private var downloadCancelled = false
+    fun cancelDownload() { downloadCancelled = true; downloadCall?.cancel() }
     private val assetPrefix = "https://github.com/Dedseckms/Dedsec-Music/releases/download/"
-    fun check(): UpdateOffer? {
+    fun check(currentVersion: String = DesktopBuild.VERSION): UpdateOffer? {
         val latest = fetch("https://api.github.com/repos/Dedseckms/Dedsec-Music/releases/latest", 256 * 1024, missing = true) ?: return null
         val release = JSONObject(String(latest, Charsets.UTF_8))
         if (release.optBoolean("draft") || release.optBoolean("prerelease")) return null
@@ -28,25 +33,25 @@ class UpdateClient(private val publicKey: ByteArray = UpdateClient::class.java.g
         val signature = asset("updates.json.sig") ?: return null
         val raw = fetch(manifest, 64 * 1024) ?: return null
         val sig = fetch(signature, 1024) ?: return null
-        return verify(raw, sig, publicKey)?.takeIf { newer(it.version, DesktopBuild.VERSION) }
+        return verify(raw, sig, publicKey)?.takeIf { newer(it.version, currentVersion) }
     }
-    fun download(offer: UpdateOffer): Path {
+    fun download(offer: UpdateOffer, checkpoint: () -> Unit = {}, progress: (Long, Long) -> Unit = { _, _ -> }): Path {
         require(offer.url.startsWith(assetPrefix))
-        val folder = DesktopPaths.root.resolve("updates/${offer.version}"); Files.createDirectories(folder)
+        val folder = downloadRoot.resolve(offer.version); Files.createDirectories(folder)
         val temp = Files.createTempFile(folder, "package-", ".part")
         try {
-            response(offer.url).use { response ->
+            response(offer.url, archive = true).use { response ->
                 check(response.isSuccessful) { "Обновление недоступно" }
                 val digest = MessageDigest.getInstance("SHA-256"); var count = 0L
                 response.body!!.byteStream().use { input -> Files.newOutputStream(temp).use { output ->
                     val buffer = ByteArray(65536)
-                    while (true) { val n = input.read(buffer); if (n < 0) break; count += n; check(count <= offer.size); digest.update(buffer, 0, n); output.write(buffer, 0, n) }
+                    while (true) { checkpoint(); val n = input.read(buffer); if (n < 0) break; count += n; check(count <= offer.size); digest.update(buffer, 0, n); output.write(buffer, 0, n); progress(count, offer.size) }
                 } }
                 check(count == offer.size && digest.digest().joinToString("") { "%02x".format(it) } == offer.sha256) { "Проверка обновления не пройдена" }
             }
             val zip = folder.resolve("update.zip"); Files.move(temp, zip, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             return zip
-        } finally { Files.deleteIfExists(temp) }
+        } finally { downloadCall = null; Files.deleteIfExists(temp) }
     }
     private fun fetch(url: String, limit: Int, missing: Boolean = false): ByteArray? = response(url).use {
         if (missing && it.code == 404) return null
@@ -54,12 +59,14 @@ class UpdateClient(private val publicKey: ByteArray = UpdateClient::class.java.g
         val bytes = it.body!!.byteStream().use { input -> input.readNBytes(limit + 1) }
         check(bytes.size <= limit); bytes
     }
-    private fun response(initial: String): okhttp3.Response {
+    private fun response(initial: String, archive: Boolean = false): okhttp3.Response {
         var url = initial
         repeat(6) {
             val uri = URI(url)
             require(uri.scheme == "https" && uri.userInfo == null && uri.host in setOf("api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "github-releases.githubusercontent.com"))
-            val response = client.newCall(Request.Builder().url(url).header("User-Agent", "DedSec-Music-Desktop/${DesktopBuild.VERSION}").build()).execute()
+            val call = (if (archive) downloadClient else client).newCall(Request.Builder().url(url).header("User-Agent", "DedSec-Music-Desktop/${DesktopBuild.VERSION}").build())
+            if (archive) { downloadCall = call; if (downloadCancelled) { call.cancel(); throw java.io.IOException("Download cancelled") } }
+            val response = call.execute()
             if (response.code !in setOf(301, 302, 303, 307, 308)) return response
             val next = response.header("Location"); response.close(); require(next != null)
             url = uri.resolve(next).toString()
@@ -67,6 +74,8 @@ class UpdateClient(private val publicKey: ByteArray = UpdateClient::class.java.g
         error("Слишком много перенаправлений")
     }
     companion object {
+        internal fun archiveClient(metadataClient: OkHttpClient): OkHttpClient = metadataClient.newBuilder()
+            .callTimeout(15, TimeUnit.MINUTES).readTimeout(45, TimeUnit.SECONDS).build()
         fun newer(candidate: String, current: String): Boolean {
             fun parts(value: String): List<Int> { require(value.matches(Regex("[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}"))); return value.split('.').map(String::toInt) }
             val a = parts(candidate); val b = parts(current)

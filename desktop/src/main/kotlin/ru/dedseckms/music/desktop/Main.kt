@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.Box
 import kotlinx.coroutines.*
 
 fun main(args: Array<String>) {
+    if ("--update-probe" in args) {
+        val offer = UpdateClient().check(currentVersion = "0.0.0") ?: error("No signed Windows release available")
+        println("Signed update probe OK: ${offer.version}")
+        return
+    }
     args.firstOrNull { it.startsWith("--render=") }?.let { renderGallery(java.nio.file.Path.of(it.substringAfter('='))); return }
     if ("--audio-smoke" in args) { audioSmoke(); return }
     application {
@@ -17,6 +22,7 @@ fun main(args: Array<String>) {
     val state = rememberWindowState(width = minOf(1440, screen.width).dp, height = minOf(940, screen.height).dp)
     DisposableEffect(Unit) { onDispose { controller.close() } }
     LaunchedEffect(Unit) { controller.exitForUpdate = { exitApplication() }; controller.checkUpdates(silent = true); if ("--demo" in args) controller.demo() else controller.restoreLogin() }
+    LaunchedEffect(Unit) { while (true) { delay(6 * 60 * 60 * 1000L); controller.checkUpdates(silent = true) } }
     Window(onCloseRequest = ::exitApplication, state = state, title = "DedSec Music", undecorated = true, icon = painterResource("app-icon.png")) {
         window.minimumSize = java.awt.Dimension(960, 600)
         Box {

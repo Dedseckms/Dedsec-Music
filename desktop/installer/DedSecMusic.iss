@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "0.3.1"
+  #define AppVersion "0.3.2"
 #endif
 #ifndef PayloadDir
   #define PayloadDir "..\build\compose\binaries\main\app\DedSec Music"

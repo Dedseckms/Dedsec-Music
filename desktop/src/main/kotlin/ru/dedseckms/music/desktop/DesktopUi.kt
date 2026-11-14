@@ -63,6 +63,7 @@ private val LocalSample = staticCompositionLocalOf { false }
                     }
                 }
             }
+            DesktopUpdateDialog(controller)
         }
     }
 }
@@ -326,6 +327,7 @@ private val LocalSample = staticCompositionLocalOf { false }
 private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceAtLeast(0) / 1000 % 60).toString().padStart(2, '0')}"
 
 @Composable private fun Settings(c: DesktopController, s: DesktopState) {
+    val updates by c.updates.collectAsState()
     var admin by remember { mutableStateOf(false) }
     if (admin && s.isAdmin) c.adminApi()?.let { api -> AdminDialog(api) { admin = false } }
     LazyColumn(contentPadding = PaddingValues(26.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -351,12 +353,12 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
         item { LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { items(listOf("blue" to "Синий", "violet" to "Сирень", "mint" to "Мята", "rose" to "Роза", "amber" to "Янтарь", "lagoon" to "Лагуна")) { (value, label) -> FilterChip(s.palette == value, { c.theme(s.dark, value) }, { Text(label) }) } } }
         item { Section("Обновления") }
         item {
-            Text(s.update, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            Text(updates.message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton({ c.checkUpdates() }) { Text("Проверить обновления") }
-                s.updateOffer?.let { offer ->
+                OutlinedButton({ c.checkUpdates() }, enabled = !updates.checking && !updates.installing) { Text(if (updates.checking) "Проверяем…" else "Проверить обновления") }
+                updates.offer?.let { offer ->
                     var confirm by remember { mutableStateOf(false) }
-                    Button({ confirm = true }) { Text("Обновить до ${offer.version}") }
+                    Button({ confirm = true }, enabled = !updates.installing) { Text("Обновить до ${offer.version}") }
                     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Установить обновление?") }, text = { Text("После скачивания и проверки приложение перезапустится. Предыдущая версия сохранится рядом с установленной.") }, confirmButton = { TextButton({ confirm = false; c.installUpdate(offer) }) { Text("Обновить") } }, dismissButton = { TextButton({ confirm = false }) { Text("Отмена") } })
                 }
             }

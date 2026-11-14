@@ -24,7 +24,7 @@ data class DesktopState(
     val mood: MixMood = MixMood.ANY, val mode: MixMode = MixMode.BALANCED, val dark: Boolean = true,
     val palette: String = "blue", val style: String = "material", val amoled: Boolean = false,
     val recentSearches: List<String> = emptyList(), val catalogLoading: Boolean = false, val total: Int? = null, val avatar: ByteArray? = null,
-    val playlistBusy: Boolean = false, val transfer: String? = null, val update: String = "Обновления ещё не опубликованы", val updateOffer: UpdateOffer? = null, val more: Boolean = true,
+    val playlistBusy: Boolean = false, val transfer: String? = null, val more: Boolean = true,
 )
 
 class DesktopController(val scope: CoroutineScope, private val preferences: DesktopPreferences = DesktopPreferences()) : AutoCloseable {
@@ -68,7 +68,6 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         }
     }
     private var recorded = ""
-    private var updateCheck: Job? = null
     private val destinations = mutableMapOf<String, Pair<String, DesktopPage?>>()
     init {
         scope.launch { audio.state.collect { sound ->
@@ -425,40 +424,10 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
             if (revision == generation) mutable.update { it.copy(avatar = data.toByteArray()) }
         }
     }
-    fun checkUpdates(silent: Boolean = false) {
-        if (updateCheck?.isActive == true) return
-        updateCheck = scope.launch {
-            try {
-                val offer = withContext(Dispatchers.IO) { UpdateClient().check() }
-                mutable.update { it.copy(updateOffer = offer, update = offer?.let { update -> "Доступна версия ${update.version}" } ?: "Доступных обновлений нет · Windows ${DesktopBuild.VERSION}") }
-            } catch (_: Exception) { if (!silent) mutable.update { it.copy(update = "Не удалось проверить обновления. Попробуй позже") } }
-        }
-    }
-    fun installUpdate(offer: UpdateOffer) {
-        scope.launch {
-            mutable.update { it.copy(update = "Скачиваем и проверяем обновление…") }
-            try {
-                val archive = withContext(Dispatchers.IO) { UpdateClient().download(offer) }
-                val resource = System.getProperty("compose.application.resources.dir")?.let(Path::of)
-                val root = resource?.parent?.parent
-                if (root == null || !Files.isRegularFile(root.resolve(".dedsec-install")) || exitForUpdate == null) {
-                    java.awt.Desktop.getDesktop().open(archive.parent.toFile())
-                    mutable.update { it.copy(update = "Проверенное обновление скачано. Распакуй его в отдельную папку") }
-                    return@launch
-                }
-                val script = archive.parent.resolve("ApplyUpdate.ps1")
-                val ready = archive.parent.resolve("ready-${java.util.UUID.randomUUID()}")
-                withContext(Dispatchers.IO) {
-                    DesktopController::class.java.getResourceAsStream("/ApplyUpdate.ps1")!!.use { Files.copy(it, script, REPLACE_EXISTING) }
-                    val process = ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script.toString(),
-                        "-ProcessId", ProcessHandle.current().pid().toString(), "-InstallRoot", root.toString(), "-Archive", archive.toString(), "-ReadyFile", ready.toString())
-                        .redirectError(ProcessBuilder.Redirect.DISCARD).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
-                    withTimeout(60_000) { while (!Files.exists(ready)) { check(process.isAlive) { "Не удалось подготовить установку" }; delay(100) } }
-                }
-                exitForUpdate?.invoke()
-            } catch (e: CancellationException) { throw e
-            } catch (_: Exception) { mutable.update { it.copy(update = "Обновление не установлено. Текущая версия сохранена") } }
-        }
-    }
-    override fun close() { scope.cancel(); audio.close() }
+    private val updateManager = DesktopUpdates(scope, { exitForUpdate })
+    val updates = updateManager.state
+    fun checkUpdates(silent: Boolean = false) { updateManager.check(force = !silent) }
+    fun installUpdate(offer: UpdateOffer) { updateManager.install(offer) }
+    fun cancelUpdate() { updateManager.cancel() }
+    override fun close() { updateManager.cancel(); scope.cancel(); audio.close() }
 }
