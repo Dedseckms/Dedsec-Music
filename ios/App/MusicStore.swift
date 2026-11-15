@@ -45,6 +45,7 @@ import MusicCore
     @Published private(set) var downloadsPaused = false
     @Published private(set) var pendingOffline: [Song] = []
     private var offlineDrain: Task<Void, Never>?
+    private var offlineSave: Task<Bool, Never>?
     private var offlineGate = OfflineListenGate()
     private func offlineKey(_ name: String) -> String? { account.map { "offline." + DeviceStorage.hash($0.server + "|" + $0.username.lowercased()) + "." + name } }
     var autoDownloadListened: Bool {
@@ -62,10 +63,13 @@ import MusicCore
         let added = songs.filter { known.insert($0.id).inserted }
         pendingOffline.append(contentsOf: added)
         let version = revision
-        Task {
+        let previous = offlineSave
+        offlineSave = Task {
+            _ = await previous?.value
+            guard !Task.isCancelled && version == revision else { return false }
             do { try await Task.detached(priority: .utility) { try DeviceStorage.saveQueued(added, account) }.value }
-            catch { if version == revision { downloadsPaused = true; report(error) }; return }
-            guard version == revision else { return }; beginOfflineDrain()
+            catch { if version == revision { downloadsPaused = true; report(error) }; return false }
+            guard !Task.isCancelled && version == revision else { return false }; beginOfflineDrain(); return true
         }
     }
     private func beginOfflineDrain() {
@@ -75,6 +79,8 @@ import MusicCore
             guard let self else { return }
             defer { if version == self.revision { self.offlineDrain = nil } }
             while !Task.isCancelled && version == self.revision && !self.pendingOffline.isEmpty {
+                _ = await self.offlineSave?.value
+                guard !Task.isCancelled && version == self.revision && !self.downloadsPaused else { return }
                 let song = self.pendingOffline[0]
                 let success = await self.performDownload(song)
                 guard !Task.isCancelled && version == self.revision else { return }
@@ -157,7 +163,7 @@ import MusicCore
     }
     private func reset() {
         invalidateMix()
-        revision += 1; offlineDrain?.cancel(); offlineDrain = nil; pendingOffline = []; downloadsPaused = false; offlineGate = OfflineListenGate(); playTask?.cancel(); searchTask?.cancel(); importTask?.cancel(); downloadTask?.cancel(); player.pause(); player.replaceCurrentItem(with: nil)
+        revision += 1; offlineSave?.cancel(); offlineSave = nil; offlineDrain?.cancel(); offlineDrain = nil; pendingOffline = []; downloadsPaused = false; offlineGate = OfflineListenGate(); playTask?.cancel(); searchTask?.cancel(); importTask?.cancel(); downloadTask?.cancel(); player.pause(); player.replaceCurrentItem(with: nil)
         if let api { Task { await api.invalidate() } }
         api = nil; account = nil; now = nil; songs = []; albums = []; playlists = []; favorites = []; offline = []; covers = [:]
         coverPending = []; importJob = nil; importError = nil; importBusy = false; source = "Сейчас играет"; waveMood = nil
@@ -324,7 +330,18 @@ import MusicCore
         catch { if !Task.isCancelled && version == revision { report(error) } }
     }
     func download(_ song: Song) async { downloadAll([song]) }
-    func resumeDownloads() { downloadsPaused = false; downloadAll([]) }
+    func resumeDownloads() {
+        guard let account else { return }; let version = revision
+        let previous = offlineSave; let pending = pendingOffline
+        offlineSave = Task {
+            _ = await previous?.value
+            guard !Task.isCancelled && version == revision else { return false }
+            do { try await Task.detached(priority: .utility) { try DeviceStorage.saveQueued(pending, account) }.value }
+            catch { if version == revision { downloadsPaused = true; report(error) }; return false }
+            guard !Task.isCancelled && version == revision else { return false }
+            downloadsPaused = false; beginOfflineDrain(); return true
+        }
+    }
     func downloadNetworkChanged() {
         let previous = offlineDrain; let version = revision
         previous?.cancel(); downloadTask?.cancel()
@@ -335,6 +352,9 @@ import MusicCore
         guard downloading == nil, let api, let account else { return false }
         let version = revision; downloading = song.id
         let task = Task<Void, Error> {
+            let recovered = try await Task.detached(priority: .utility) { try DeviceStorage.recoverDownloaded(song, account) }.value
+            try Task.checkCancellation(); guard version == revision else { throw CancellationError() }
+            if recovered { offline.removeAll { $0.id == song.id }; offline.append(song); return }
             let url = try await api.mediaURL("stream", id: song.id)
             try Task.checkCancellation(); guard version == revision else { throw CancellationError() }
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".audio")
