@@ -208,7 +208,11 @@ if __name__ == '__main__':
     ACCOUNTS=admin_api.configure(profile.BASE, os.environ.get('NAV_DB_PATH', '/nav-data/navidrome.db'), LIBRARY,
                         imports=IMPORTER.path, cancel=IMPORTER.cancel_uid)
     IMPORTER.account_guard=lambda user: not ACCOUNTS.native_blocked(user['id'],user['userName'])
+    import system_admin
+    SYSTEM=system_admin.configure(profile.BASE,LIBRARY,volumes=json.loads(os.environ.get('STORAGE_VOLUMES','[]')),slot=audio.UPLOAD,
+                        nav_database=os.environ.get('NAV_DB_PATH','/nav-data/navidrome.db'),library_ids=json.loads(os.environ.get('RADIO_LIBRARY_MAP','{"1":"/storage/library"}')))
     try:Server(('0.0.0.0', 8080), Handler).serve_forever(poll_interval=1)
     finally:
+        SYSTEM.close()
         if RADIO is not None:RADIO.index.close()
         IMPORTER.close()

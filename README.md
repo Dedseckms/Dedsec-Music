@@ -11,7 +11,7 @@
     <a href="LICENSE"><img alt="GPL v3 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-A8C7FA?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Android 8+" src="https://img.shields.io/badge/Android-8.0%2B-C4E7D4?style=flat-square&amp;labelColor=182231" />
     <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-A8C7FA?style=flat-square&amp;labelColor=182231" />
-    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.1"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
+    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.2"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Material 3" src="https://img.shields.io/badge/design-Material_3-D0BCFF?style=flat-square&amp;labelColor=182231" />
   </p>
 
@@ -22,7 +22,7 @@
 
 DedSec Music — открытый музыкальный клиент для Android и Windows. Подключи Navidrome, собери любимую коллекцию и слушай её дома, в дороге и без интернета. На одном сервере можно жить с друзьями: аудиотека общая, а плейлисты и избранное у каждого свои.
 
-[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.1). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
+[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.2). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
 
 ## Интерфейс
 
@@ -45,7 +45,7 @@ DedSec Music — открытый музыкальный клиент для And
 
 | | Возможности |
 | :-- | :-- |
-| **Слушать** | Потоковое воспроизведение, очередь, перемешивание, повтор и офлайн-копии. |
+| **Слушать** | Потоковое воспроизведение, очередь, перемешивание, повтор, массовое скачивание и автоматический офлайн. |
 | **Находить** | Поиск по части названия, страницы исполнителей, альбомы и жанры из тегов библиотеки. |
 | **Моя волна** | Персональный микс из музыки сервера: настроение, любимое, открытия и баланс. |
 | **Собирать** | Личные плейлисты, избранное и аватар профиля. |
@@ -53,7 +53,7 @@ DedSec Music — открытый музыкальный клиент для And
 | **Оформлять** | Material, Стекло, Аврора, Минимал; палитры, светлая, тёмная и AMOLED-темы. |
 | **В дороге** | Android MediaSession, фоновое воспроизведение и каталог для Android Auto. |
 | **Обновлять** | Проверка GitHub при запуске; установка новой версии по подтверждению пользователя. |
-| **Управлять** | Администратору — пользователи, создание аккаунтов, их загрузки и удаление с сохранением общей музыки. |
+| **Управлять** | Администратору — пользователи и загрузки, графики CPU/RAM/сети, процессы, диски и проверенное копирование музыки. |
 
 «Моя волна» использует жанры, историю, избранное, пропуски и фоновый анализ звука на сервере. Поддержка отдельных капсул и панелей оболочек Android зависит от прошивки телефона. Волна, управление пользователями, перенос, профили и проверка загрузок требуют серверного дополнения из этого репозитория.
 
@@ -75,6 +75,14 @@ DedSec Music — открытый музыкальный клиент для And
 Сбор коллекции, скачивание, проверка каталога и восстановление личных плейлистов отображаются отдельными этапами. [Открыть гайд →](docs/YANDEX_IMPORT.md)
 
 </details>
+
+## Сервер под рукой
+
+Настройки → **Сервер и диски** в Windows и Android. Нагрузка, память, сеть и процессы — в одном месте; история до суток, обновление раз в пять секунд. Подготовка копии на новый диск сохраняет исходную библиотеку и проверяет файлы по SHA-256. [Как это устроено →](server/SYSTEM_STORAGE_API.md)
+
+![Панель сервера — демонстрационные показатели](docs/assets/server-dashboard.png)
+
+На изображении — настоящий экран приложения с демонстрационными показателями. Подключение и активация нового диска выполняются оператором сервера отдельно.
 
 ## Для разработчиков
 

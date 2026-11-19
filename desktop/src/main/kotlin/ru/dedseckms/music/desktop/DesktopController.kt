@@ -12,6 +12,7 @@ import java.nio.file.StandardCopyOption.*
 
 data class DesktopPage(val kind: String, val title: String, val songs: List<Song>, val playlist: MusicPlaylist? = null, val albums: List<Album> = emptyList())
 data class DesktopState(
+    val autoOffline: OfflinePreferences = OfflinePreferences(), val downloadIds: Set<String> = emptySet(), val downloadProgress: Int = 0, val downloadsPaused: Boolean = false,
     val importStatus: ImportStatus = ImportStatus(), val isAdmin: Boolean = false,
     val username: String = "", val loggedIn: Boolean = false, val demo: Boolean = false,
     val busy: Boolean = false, val message: String? = null, val tab: String = "Главная", val filter: String = "Треки",
@@ -31,7 +32,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var appearance = preferences.read()
     private val preferenceLock = kotlinx.coroutines.sync.Mutex()
     private val searchHistoryLock = kotlinx.coroutines.sync.Mutex()
-    private fun DesktopState.styled() = copy(dark = appearance.dark, palette = appearance.palette, style = appearance.style, amoled = appearance.amoled)
+    private fun DesktopState.styled() = copy(autoOffline = store?.offlinePreferences() ?: OfflinePreferences(), dark = appearance.dark, palette = appearance.palette, style = appearance.style, amoled = appearance.amoled)
     var exitForUpdate: (() -> Unit)? = null
     private val mutable = MutableStateFlow(DesktopState().styled())
     val state = mutable.asStateFlow()
@@ -51,12 +52,16 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var mixJob: Job? = null
     private var mixRevision = 0L
     private fun invalidateMix() { mixRevision++; mixJob?.cancel(); mixJob = null }
-    private fun cancelSession() { queueEpoch++; prepareJob?.cancel(); importSession?.close(); importSession = null; accountTasks.forEach(Job::cancel); accountTasks.clear(); pageJob?.cancel(); searchJob?.cancel(); playJob?.cancel(); invalidateMix(); audio.stop() }
+    private fun cancelSession() { queueSaveJob?.cancel(); queueSaveJob = null; downloadJob?.cancel(); downloadJob = null; downloadQueue.clear(); queueEpoch++; prepareJob?.cancel(); importSession?.close(); importSession = null; accountTasks.forEach(Job::cancel); accountTasks.clear(); pageJob?.cancel(); searchJob?.cancel(); playJob?.cancel(); invalidateMix(); audio.stop() }
     private fun track(job: Job): Job { accountTasks += job; job.invokeOnCompletion { accountTasks.remove(job) }; return job }
     private var pageJob: Job? = null
     private var searchJob: Job? = null
     private var playJob: Job? = null
     private val transferLock = Semaphore(1)
+    private val downloadQueue = ArrayDeque<Song>()
+    private var downloadJob: Job? = null
+    private var queueSaveJob: Job? = null
+    private val offlineGate = OfflineListenGate()
     private val playlistLock = kotlinx.coroutines.sync.Mutex()
     private fun playlistAction(block: suspend (NavApi) -> Unit) = action { nav ->
         if (state.value.importStatus.job?.syncingPlaylists == true) { notice("Дождись завершения переноса плейлистов"); return@action }
@@ -72,6 +77,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     init {
         scope.launch { audio.state.collect { sound ->
             val song = state.value.now
+            if (song != null && offlineGate.observe("${store?.credentials?.accountId}:${song.id}", sound.playing, sound.position, sound.duration, System.nanoTime() / 1_000_000) && state.value.autoOffline.afterListen) downloadAll(listOf(song), silent = true)
             if (song != null && sound.playing && sound.position >= 30_000 && recorded != song.id) {
                 recorded = song.id
                 val nav = api; val local = store
@@ -111,6 +117,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 currentCoroutineContext().ensureActive(); if (revision != generation) return@launch
                 api = NavApi(credentials); profile = ProfileApi(credentials); store = DesktopStore(credentials); covers = DesktopCovers(api!!, store!!.directory)
                 mutable.value = DesktopState(username = canonical, loggedIn = true, busy = true, offline = offline, recentSearches = recent).styled()
+                downloadAll(withContext(Dispatchers.IO) { local.pendingDownloads() }, silent = true)
                 refresh()
                 refreshImport()
                 checkUpdates(silent = true)
@@ -130,6 +137,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
             if (offline.isEmpty()) { login(saved.server, saved.username, saved.password, true); return@launch }
             api = NavApi(saved); profile = ProfileApi(saved); store = local; covers = DesktopCovers(api!!, local.directory)
             mutable.value = DesktopState(username = saved.username, loggedIn = true, songs = offline, offline = offline, recentSearches = recent).styled()
+            downloadAll(withContext(Dispatchers.IO) { local.pendingDownloads() }, silent = true)
             refresh(); refreshImport(); checkUpdates(silent = true)
         })
     }
@@ -344,7 +352,10 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     fun favorite(song: Song) = action(false) { nav ->
         val revision = generation; val enabled = state.value.favorites.none { it.id == song.id }; nav.await { setFavorite(song.id, enabled) }
-        if (revision == generation) mutable.update { it.copy(favorites = if (enabled) (it.favorites + song).distinctBy(Song::id) else it.favorites.filterNot { s -> s.id == song.id }) }
+        if (revision == generation) {
+            mutable.update { it.copy(favorites = if (enabled) (it.favorites + song).distinctBy(Song::id) else it.favorites.filterNot { s -> s.id == song.id }) }
+            if (enabled && state.value.autoOffline.onFavorite) downloadAll(listOf(song), silent = true)
+        }
     }
     fun lists() = action(false) { nav -> val revision = generation; val lists = nav.await { playlists() }; if (revision == generation) mutable.update { it.copy(playlists = lists) } }
     private fun apply(contents: PlaylistContents) {
@@ -367,14 +378,61 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         try { val content = nav.await { removeFromPlaylist(list.id, index, page.songs.map(Song::id)) }; if (revision == generation) { apply(content); notice("Убрано из плейлиста") } }
         catch (e: PlaylistChangedException) { if (revision == generation) apply(e.latest); throw e }
     }
-    fun download(song: Song) {
+    fun download(song: Song) = downloadAll(listOf(song))
+    fun autoOffline(afterListen: Boolean = state.value.autoOffline.afterListen, onFavorite: Boolean = state.value.autoOffline.onFavorite) {
+        val value = OfflinePreferences(afterListen, onFavorite)
+        store?.offlinePreferences(value); mutable.update { it.copy(autoOffline = value) }
+    }
+    fun downloadAll(songs: List<Song>, silent: Boolean = false) {
         val local = store ?: return; val revision = generation
-        action(false) { nav -> transferLock.withPermit {
-        currentCoroutineContext().ensureActive(); if (revision != generation) return@withPermit
-        mutable.update { it.copy(transfer = "Скачиваем: ${song.title}") }
+        val known = (state.value.offline.map(Song::id) + downloadQueue.map(Song::id)).toHashSet()
+        val added = songs.distinctBy(Song::id).filter { known.add(it.id) }
+        downloadQueue.addAll(added)
+        if (added.isNotEmpty()) {
+            val previousSave = queueSaveJob
+            queueSaveJob = track(scope.launch {
+                try { previousSave?.join(); withContext(Dispatchers.IO) { local.queueDownloads(added) } }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { if (revision == generation) mutable.update { it.copy(downloadsPaused = true, message = "Не удалось сохранить очередь на диске") } }
+            })
+            mutable.update { it.copy(downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
+        }
+        if (!silent) notice(if (added.isEmpty()) "Треки уже скачаны или стоят в очереди" else "В очередь добавлено: ${added.size}")
+        if (state.value.downloadsPaused || downloadJob?.isActive == true || downloadQueue.isEmpty()) return
+        val nav = api ?: return
+        downloadJob = track(scope.launch {
+            while (downloadQueue.isNotEmpty() && revision == generation) {
+                queueSaveJob?.join()
+                currentCoroutineContext().ensureActive()
+                if (revision != generation || state.value.downloadsPaused) return@launch
+                val song = downloadQueue.first()
+                try { transferLock.withPermit { downloadOne(song, local, nav, revision) }; withContext(Dispatchers.IO) { local.finishDownload(song.id) } }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { if (revision == generation) mutable.update { it.copy(downloadsPaused = true, message = "Загрузка приостановлена. Проверь сеть и свободное место; очередь сохранена") }; return@launch }
+                currentCoroutineContext().ensureActive()
+                if (revision != generation) return@launch
+                downloadQueue.removeFirst()
+                mutable.update { it.copy(downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
+            }
+        })
+    }
+    fun resumeDownloads() {
+        val local = store ?: return; val revision = generation
+        val pending = downloadQueue.toList(); val previousSave = queueSaveJob
+        queueSaveJob = track(scope.launch {
+            try {
+                previousSave?.join(); withContext(Dispatchers.IO) { local.queueDownloads(pending) }
+                if (revision == generation) { mutable.update { it.copy(downloadsPaused = false) }; downloadAll(emptyList(), silent = true) }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (revision == generation) mutable.update { it.copy(downloadsPaused = true, message = "Не удалось сохранить очередь на диске") } }
+        })
+    }
+    private suspend fun downloadOne(song: Song, local: DesktopStore, nav: NavApi, revision: Int) {
+        mutable.update { it.copy(transfer = "Скачиваем: ${song.title}", downloadProgress = 0) }
         try {
             transfer(nav.client) { client ->
                 val output = local.audio(song); Files.createDirectories(output.parent)
+                if (Files.isRegularFile(output) && Files.size(output) > 0) { local.downloaded(song, Files.size(output)); return@transfer }
                 if (Files.getFileStore(output.parent).usableSpace < 512L * 1024 * 1024) error("Недостаточно места на диске")
                 val temp = Files.createTempFile(output.parent, "download-", ".part")
                 try {
@@ -384,16 +442,16 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                         var count = 0L
                         body.byteStream().use { input -> Files.newOutputStream(temp).use { stream ->
                             val bytes = ByteArray(65536)
-                            while (true) { currentCoroutineContext().ensureActive(); val n = input.read(bytes); if (n < 0) break; count += n; if (count > 2L * 1024 * 1024 * 1024) throw java.io.IOException("Файл слишком большой"); if (count % (4 * 1024 * 1024) < 65536 && Files.getFileStore(output.parent).usableSpace < 256L * 1024 * 1024) throw java.io.IOException("Недостаточно места на диске"); stream.write(bytes, 0, n) }
+                            while (true) { currentCoroutineContext().ensureActive(); val n = input.read(bytes); if (n < 0) break; count += n; if (count > 2L * 1024 * 1024 * 1024) throw java.io.IOException("Файл слишком большой"); if (count % (4 * 1024 * 1024) < 65536 && Files.getFileStore(output.parent).usableSpace < 256L * 1024 * 1024) throw java.io.IOException("Недостаточно места на диске"); stream.write(bytes, 0, n); if (body.contentLength() > 0 && revision == generation) mutable.update { it.copy(downloadProgress = (count * 100 / body.contentLength()).toInt().coerceIn(0, 100)) } }
                         } }
                         if (count <= 0 || body.contentLength() >= 0 && count != body.contentLength()) throw java.io.IOException("Загрузка прервалась")
                         currentCoroutineContext().ensureActive(); Files.move(temp, output, ATOMIC_MOVE, REPLACE_EXISTING); local.downloaded(song, count)
                     }
                 } finally { Files.deleteIfExists(temp) }
             }
-            if (revision == generation) { mutable.update { it.copy(offline = local.offline()) }; notice("Трек скачан") }
+            if (revision == generation) { mutable.update { it.copy(offline = (it.offline + song).distinctBy(Song::id)) } }
         } finally { if (revision == generation) mutable.update { it.copy(transfer = null) } }
-    } } }
+    }
     fun removeOffline(song: Song) {
         val local = store ?: return; val revision = generation
         action(false) { withContext(Dispatchers.IO) { local.removeOffline(song) }; if (revision == generation) mutable.update { it.copy(offline = local.offline()) } }

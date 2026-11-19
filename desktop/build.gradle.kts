@@ -26,7 +26,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "DedSec Music"
-            packageVersion = "0.3.2"
+            packageVersion = "0.4.0"
             description = "Your library. Your rhythm."
             vendor = "Dedseckms"
             copyright = "Copyright 2026 Dedseckms"
@@ -52,4 +52,13 @@ tasks.register<JavaExec>("audioSmoke") {
     workingDir = rootProject.projectDir
     systemProperty("compose.application.resources.dir", rootProject.file(".tools/desktop-resources/windows").absolutePath)
     args("--audio-smoke")
+}
+
+tasks.register<JavaExec>("renderDashboard") {
+    dependsOn("classes")
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("ru.dedseckms.music.desktop.MainKt")
+    workingDir = rootProject.projectDir
+    args("--render-dashboard=" + rootProject.file(".private/dashboard-preview").absolutePath)
+    maxHeapSize = "512m"
 }

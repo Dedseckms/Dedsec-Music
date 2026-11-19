@@ -173,6 +173,12 @@ POST `/api/resources?source=Uploads&path=/name.mp3&override=false` приним�
 Остальные файловые операции API запрещены. Публичной регистрации нет.
 Контракт очереди переноса описан в [IMPORT_API.md](IMPORT_API.md).
 
+Администратору доступны графики нагрузки, процессы и инвентаризация дисков.
+Безопасное копирование на отдельно подготовленный том описано в
+[SYSTEM_STORAGE_API.md](SYSTEM_STORAGE_API.md). Приложение не форматирует диски,
+не монтирует их и не удаляет исходные треки; переключение путей выполняется
+отдельно после проверки копии.
+
 ```bash
 python3.12 -m venv .tools/test-venv
 .tools/test-venv/bin/pip install --require-hashes --only-binary=:all: -r api/requirements.txt

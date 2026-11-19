@@ -140,6 +140,14 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")))
         adminRequest("users/$id", "DELETE")
     }
+    fun adminSystem(windowSeconds: Int = 3600): ServerSystem = ServerSystem.parse(adminRequest("system?windowSeconds=${windowSeconds.coerceIn(300, 86400)}&points=240"))
+    fun adminStorage(): ServerStorage = ServerStorage.parse(adminRequest("storage"))
+    fun adminStoragePlan(shard: String, volume: String): StoragePlan = StoragePlan.parse(adminRequest("storage/plans", "POST", JSONObject().put("sourceShardId", shard).put("targetVolumeId", volume)))
+    fun adminStorageStart(plan: String, hash: String): StorageMove = StorageMove.parse(adminRequest("storage/moves", "POST", JSONObject().put("planId", plan).put("planHash", hash)))
+    fun adminStorageAction(id: String, action: String): StorageMove {
+        require(id.matches(Regex("[A-Za-z0-9_-]{1,96}")) && action in setOf("cancel", "resume"))
+        return StorageMove.parse(adminRequest("storage/moves/$id/$action", "POST"))
+    }
     private fun adminRequest(path: String, method: String = "GET", payload: JSONObject? = null): JSONObject = authorized { jwt ->
         val split = path.split('?', limit = 2)
         val url = endpoint("dedsec/profile/v1/admin/${split[0]}").newBuilder()
@@ -151,10 +159,11 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
     }.use {
         if (!it.isSuccessful) throw IOException(when (it.code) {
             403 -> "Управление доступно только администратору"
-            409 -> "Имя занято или аккаунт нельзя удалить"
-            400, 422 -> "Проверь логин и пароль: минимум 12 символов"
-            404 -> "Управление пользователями пока не включено на сервере"
-            else -> "Не удалось изменить пользователей. Обнови список перед повтором"
+            409 -> if (path.startsWith("users")) "Имя занято или аккаунт нельзя удалить" else "Состояние дисков изменилось. Обнови данные и подготовь план заново"
+            400, 422 -> if (path.startsWith("users")) "Проверь логин и пароль: минимум 12 символов" else "Проверь выбранные диски и план копирования"
+            404 -> if (path.startsWith("users")) "Управление пользователями пока не включено на сервере" else "Обнови серверное дополнение для статистики и управления дисками"
+            503 -> "Сервер собирает показатели или временно занят. Попробуй через несколько секунд"
+            else -> "Не удалось выполнить запрос администратора. Обнови состояние перед повтором"
         })
         JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 524288), Charsets.UTF_8))
     }

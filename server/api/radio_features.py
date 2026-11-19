@@ -113,10 +113,11 @@ class Index:
     def available(self,songs):
         with self.db() as db:rows={row[0]:row[1:] for row in db.execute('SELECT id,signature,value,error,updated FROM features')}
         result={}
+        physicals=self.catalog.physicals({key:song for key,song in songs.items() if key in rows})
         for key,song in songs.items():
             row=rows.get(key)
             if row is None:continue
-            physical=self.catalog.physical(song)
+            physical=physicals.get(key)
             if physical and row and row[0]==signature(song,physical) and not row[2]:result[key]=json.loads(row[1])
         return result
 

@@ -32,13 +32,15 @@ enum DeviceStorage {
         var mutable = root; try mutable.setResourceValues(values)
         return root
     }
-    static func offline(_ account: Credentials) -> [Song] {
-        guard let root = try? folder(account), let data = try? Data(contentsOf: root.appendingPathComponent("offline.json")),
-              let songs = try? JSONDecoder().decode([Song].self, from: data) else { return [] }
-        return songs.filter { FileManager.default.fileExists(atPath: root.appendingPathComponent(hash($0.id) + ".mp3").path) }
+    private static func library(_ account: Credentials) throws -> OfflineLibrary { try OfflineLibrary(root: folder(account), key: hash) }
+    static func offline(_ account: Credentials) -> [Song] { (try? library(account).offline()) ?? [] }
+    static func saveDownloaded(_ song: Song, _ account: Credentials) throws { try library(account).saveDownloaded(song) }
+    static func removeIndex(_ song: Song, _ account: Credentials) throws { try library(account).removeIndex(song) }
+    static func queued(_ account: Credentials) -> [Song] { (try? library(account).queued()) ?? [] }
+    static func saveQueued(_ songs: [Song], _ account: Credentials) throws { try library(account).saveQueued(songs) }
+    static func finishQueued(_ song: Song, _ account: Credentials) throws { try library(account).finishQueued(song) }
+    static func audio(_ song: Song, _ account: Credentials) throws -> URL { try library(account).audio(song) }
+    static func recoverDownloaded(_ song: Song, _ account: Credentials) throws -> Bool {
+        try library(account).recoverDownloaded(song)
     }
-    static func saveIndex(_ songs: [Song], _ account: Credentials) throws {
-        try JSONEncoder().encode(songs).write(to: folder(account).appendingPathComponent("offline.json"), options: .atomic)
-    }
-    static func audio(_ song: Song, _ account: Credentials) throws -> URL { try folder(account).appendingPathComponent(hash(song.id) + ".mp3") }
 }
