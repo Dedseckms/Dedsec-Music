@@ -198,7 +198,6 @@ public actor MusicAPI {
         return try SongLyrics.parse(await request("dedsec/profile/v1/lyrics/" + id, limit: 524288))
     }
     public func upload(_ file: URL, server: String, username: String, password: String, unified: Bool = false) async throws {
-        let base = try Self.validateServer(server)
         let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 100_000_000 else { throw MusicError.message("Максимальный размер — 100 МБ") }
         if unified {
@@ -214,6 +213,7 @@ public actor MusicAPI {
             guard (200..<300).contains(result.statusCode) else { throw MusicError.message("Файл отклонён сервером. Проверь формат, размер, длительность и вход") }
             return
         }
+        let base = try Self.validateServer(server)
         var loginURL = URLComponents(url: base.appendingPathComponent("api/auth/login"), resolvingAgainstBaseURL: false)!
         loginURL.queryItems = [p("username", username)]
         var login = URLRequest(url: loginURL.url!); login.httpMethod = "POST"
