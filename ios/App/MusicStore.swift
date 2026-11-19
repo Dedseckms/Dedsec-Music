@@ -30,6 +30,13 @@ import MusicCore
     @Published var importBusy = false
     @Published var downloading: String?
     @Published var uploading = false
+    @Published var unifiedUploads = false
+    var waveActive: Bool { waveMood != nil }
+    func refreshUploadConnection() async {
+        guard let api else { return }; let version = revision
+        let ready = (try? await api.unifiedUploads()) == true
+        if version == revision { unifiedUploads = ready }
+    }
     @Published var playlistBusy = false
     @Published var covers: [String: UIImage] = [:]
     var api: MusicAPI?
@@ -169,7 +176,7 @@ import MusicCore
         coverPending = []; importJob = nil; importError = nil; importBusy = false; source = "Сейчас играет"; waveMood = nil
         queueSongs = []; queue = PlaybackQueue(); search = nil; query = ""; searching = false; shuffled = false; repeated = false
         playing = false; buffering = false; position = 0; duration = 0; MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        downloading = nil; downloadTask = nil; uploading = false; playlistBusy = false
+        downloading = nil; downloadTask = nil; uploading = false; unifiedUploads = false; playlistBusy = false
     }
     func logout() { reset(); try? DeviceStorage.remember(nil) }
     func refresh() async {
@@ -236,7 +243,7 @@ import MusicCore
             select(index)
         } else if !forward { seek(0) }
     }
-    func shuffle() { invalidateMix(); shuffled.toggle(); queue.shuffle(shuffled) }
+    func shuffle() { guard !waveActive else { return }; invalidateMix(); shuffled.toggle(); queue.shuffle(shuffled) }
     private func ended() {
         if repeated { seek(0); player.play() }
         else if let index = queue.step(true) { select(index) }
@@ -256,7 +263,7 @@ import MusicCore
                 try Task.checkCancellation()
                 guard version == revision && token == mixRevision else { return }
                 guard !mix.songs.isEmpty else { message = mix.emptyMessage; return }
-                setQueue(mix.songs, source: "Моя волна · \(mood.rawValue)"); waveMood = mood; waveFavoritesOnly = favoritesOnly
+                shuffled = false; setQueue(mix.songs, source: "Моя волна · \(mood.rawValue)"); waveMood = mood; waveFavoritesOnly = favoritesOnly
             } catch { if !Task.isCancelled && version == revision && token == mixRevision { report(error) } }
         }
         mixTask = task
@@ -411,7 +418,7 @@ import MusicCore
         guard !uploading, let api else { return }; uploading = true; let version = revision
         defer { if version == revision { uploading = false } }
         let access = file.startAccessingSecurityScopedResource(); defer { if access { file.stopAccessingSecurityScopedResource() } }
-        do { try await api.upload(file, server: server, username: username, password: password)
+        do { try await api.upload(file, server: server, username: username, password: password, unified: unifiedUploads)
             if version == revision { message = "Файл на сервере. Он появится после сканирования музыкальной библиотеки" }
         } catch { if version == revision { report(error) } }
     }

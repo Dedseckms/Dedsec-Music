@@ -187,10 +187,33 @@ public actor MusicAPI {
         guard UUID(uuidString: id) != nil else { throw MusicError.message("Обнови статус переноса") }
         return try JSONDecoder().decode(ImportEnvelope.self, from: await request("dedsec/import/v1/yandex/jobs/\(id)/cancel", method: "POST", body: Data("{}".utf8))).job
     }
-    public func upload(_ file: URL, server: String, username: String, password: String) async throws {
+    public func unifiedUploads() async throws -> Bool {
+        let bytes = try await request("dedsec/profile/v1/capabilities", limit: 65536)
+        let data = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        let uploads = data?["uploads"] as? [String: Any]
+        return (data?["schema"] as? Int) == 1 && (uploads?["mode"] as? String) == "navidrome" && (uploads?["path"] as? String) == "/dedsec/profile/v1/uploads"
+    }
+    public func lyrics(_ id: String) async throws -> SongLyrics {
+        guard !id.isEmpty, id.utf8.count <= 128, !id.contains("/"), !id.contains("\\"), id != ".", id != ".." else { throw MusicError.message("Некорректный трек") }
+        return try SongLyrics.parse(await request("dedsec/profile/v1/lyrics/" + id, limit: 524288))
+    }
+    public func upload(_ file: URL, server: String, username: String, password: String, unified: Bool = false) async throws {
         let base = try Self.validateServer(server)
         let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 100_000_000 else { throw MusicError.message("Максимальный размер — 100 МБ") }
+        if unified {
+            let jwt = try await authorize()
+            var parts = URLComponents(url: endpoint("dedsec/profile/v1/uploads"), resolvingAgainstBaseURL: false)!
+            parts.queryItems = [p("path", "/" + file.lastPathComponent)]
+            var request = URLRequest(url: parts.url!); request.httpMethod = "POST"
+            request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization"); request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            let transfer = HeaderOnlyUpload(); let id = UUID(); uploads[id] = transfer
+            defer { uploads.removeValue(forKey: id) }
+            let result = try await transfer.send(request, file: file)
+            try Task.checkCancellation(); guard valid else { throw CancellationError() }
+            guard (200..<300).contains(result.statusCode) else { throw MusicError.message("Файл отклонён сервером. Проверь формат, размер, длительность и вход") }
+            return
+        }
         var loginURL = URLComponents(url: base.appendingPathComponent("api/auth/login"), resolvingAgainstBaseURL: false)!
         loginURL.queryItems = [p("username", username)]
         var login = URLRequest(url: loginURL.url!); login.httpMethod = "POST"
