@@ -148,7 +148,7 @@ internal fun ArtistScreen(profile: ArtistProfile, state: AppState, vm: MusicView
 
 @Composable
 internal fun UploadScreen(state: AppState, vm: MusicViewModel, connect: () -> Unit, pick: () -> Unit) {
-    LaunchedEffect(state.username) { vm.refreshImport() }
+    LaunchedEffect(state.username) { vm.refreshImport(); vm.refreshUploadConnection() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { YandexImportCard(state.importStatus, !state.demo, vm::startImport, vm::cancelImport, vm::refreshImport) }
         item {

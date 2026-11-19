@@ -21,7 +21,7 @@ data class DesktopState(
     val favorites: List<Song> = emptyList(), val offline: List<Song> = emptyList(), val page: DesktopPage? = null,
     val search: SearchResults = SearchResults(emptyList(), emptyList()), val searching: Boolean = false,
     val now: Song? = null, val queue: List<Song> = emptyList(), val cursor: Int = 0, val shuffle: Boolean = false,
-    val repeat: Boolean = false, val ended: Boolean = false, val source: String = "Сейчас играет", val wave: Boolean = false,
+    val repeat: Boolean = false, val repeatOne: Boolean = false, val unifiedUpload: Boolean = false, val ended: Boolean = false, val source: String = "Сейчас играет", val wave: Boolean = false,
     val mood: MixMood = MixMood.ANY, val mode: MixMode = MixMode.BALANCED, val dark: Boolean = true,
     val palette: String = "blue", val style: String = "material", val amoled: Boolean = false,
     val recentSearches: List<String> = emptyList(), val catalogLoading: Boolean = false, val total: Int? = null, val avatar: ByteArray? = null,
@@ -43,6 +43,15 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var api: NavApi? = null
     private var profile: ProfileApi? = null
     fun adminApi(): ProfileApi? = if (state.value.isAdmin && !state.value.demo) profile else null
+    fun lyricsApi(): ProfileApi? = if (state.value.demo) null else profile
+    fun lyricsCache(song: Song): java.io.File? = store?.directory?.resolve("lyrics/${sha256(song.id)}.json")?.toFile()
+    fun refreshUploadConnection() {
+        val service = profile ?: return; val revision = generation
+        track(scope.launch {
+            val ready = try { service.await { capabilities() } } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+            if (revision == generation) mutable.update { it.copy(unifiedUpload = ready) }
+        })
+    }
     private var importSession: YandexImportSession? = null
     var store: DesktopStore? = null; private set
     var covers: DesktopCovers? = null; private set
@@ -119,7 +128,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 mutable.value = DesktopState(username = canonical, loggedIn = true, busy = true, offline = offline, recentSearches = recent).styled()
                 downloadAll(withContext(Dispatchers.IO) { local.pendingDownloads() }, silent = true)
                 refresh()
-                refreshImport()
+                refreshImport(); refreshUploadConnection()
                 checkUpdates(silent = true)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (revision == generation) mutable.update { it.copy(busy = false, message = failure(e)) } }
@@ -138,7 +147,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
             api = NavApi(saved); profile = ProfileApi(saved); store = local; covers = DesktopCovers(api!!, local.directory)
             mutable.value = DesktopState(username = saved.username, loggedIn = true, songs = offline, offline = offline, recentSearches = recent).styled()
             downloadAll(withContext(Dispatchers.IO) { local.pendingDownloads() }, silent = true)
-            refresh(); refreshImport(); checkUpdates(silent = true)
+            refresh(); refreshImport(); refreshUploadConnection(); checkUpdates(silent = true)
         })
     }
     fun demo() {
@@ -281,7 +290,8 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     private fun prepareNext() {
         prepareJob?.cancel()
-        val position = if (queue.cursor + 1 < queue.order.size) queue.cursor + 1 else if (state.value.repeat && queue.order.size > 1) 0 else -1
+        if (state.value.wave && state.value.repeatOne) { audio.clearNext(); return }
+        val position = if (queue.cursor + 1 < queue.order.size) queue.cursor + 1 else if (state.value.repeat && !state.value.wave && queue.order.size > 1) 0 else -1
         val index = queue.order.getOrNull(position)
         if (index == null || index == queue.order.getOrNull(queue.cursor)) { audio.clearNext(); return }
         val song = queue.songs[index]; val nav = api ?: return; val local = store ?: return
@@ -308,7 +318,8 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         prepareNext()
     }
     private fun onEnded() {
-        if (queue.move(true, state.value.repeat)) playCurrent()
+        if (state.value.wave && state.value.repeatOne) playCurrent()
+        else if (queue.move(true, state.value.repeat && !state.value.wave)) playCurrent()
         else if (state.value.wave) { mutable.update { it.copy(ended = true) }; wave(keep = true) }
         else mutable.update { it.copy(ended = true) }
     }
@@ -317,7 +328,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         invalidateMix()
         val song = state.value.now; val activeProfile = profile
         val position = audio.state.value.position; val duration = audio.state.value.duration
-        if (queue.move(forward, state.value.repeat)) {
+        if (queue.move(forward, state.value.repeat && !state.value.wave)) {
             if (forward && state.value.wave && song != null && activeProfile != null) scope.launch {
                 try { activeProfile.await { radioEvent(song.id, "skipped", position, duration) } }
                 catch (e: CancellationException) { throw e }
@@ -327,8 +338,8 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         }
     }
     fun select(index: Int) { invalidateMix(); if (queue.select(index)) playCurrent() }
-    fun shuffle() { invalidateMix(); prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
-    fun repeat() { mutable.update { it.copy(repeat = !it.repeat) }; prepareNext() }
+    fun shuffle() { if (state.value.wave) return; invalidateMix(); prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
+    fun repeat() { mutable.update { if (it.wave) it.copy(repeatOne = !it.repeatOne) else it.copy(repeat = !it.repeat) }; prepareNext() }
     fun wave(mood: MixMood = state.value.mood, mode: MixMode = state.value.mode, keep: Boolean = false) {
         val activeProfile = profile ?: return; val local = store ?: return; val revision = generation
         invalidateMix(); val mixToken = mixRevision
@@ -462,10 +473,10 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         currentCoroutineContext().ensureActive(); if (revision != generation) return@withPermit
         try {
             transfer(NavApi.httpClient()) { client ->
-                val uploader = UploadApi(Credentials(ServerAddress.normalize(server), username, password), client); uploader.login()
+                val unified = state.value.unifiedUpload; val service = profile ?: error("Войди в музыкальный аккаунт"); val uploader = if (unified) null else UploadApi(Credentials(ServerAddress.normalize(server), username, password), client).apply { login() }
                 for (file in files) {
                     currentCoroutineContext().ensureActive(); val size = Files.size(file); UploadPolicy.checkBytes(size)
-                    uploader.upload(file.fileName.toString(), size, { Files.newInputStream(file) }) { sent, total -> if (revision == generation) mutable.update { it.copy(transfer = "${file.fileName} · ${if (total > 0) sent * 100 / total else 0}%") } }
+                    val progress: (Long, Long) -> Unit = { sent, total -> if (revision == generation) mutable.update { it.copy(transfer = "${file.fileName} · ${if (total > 0) sent * 100 / total else 0}%") } }; if (unified) service.await(600_000) { upload(file.fileName.toString(), size, { Files.newInputStream(file) }, progress) } else uploader!!.upload(file.fileName.toString(), size, { Files.newInputStream(file) }, progress)
                 }
             }
             if (revision == generation) notice("Файлы на сервере. Они появятся после сканирования библиотеки")

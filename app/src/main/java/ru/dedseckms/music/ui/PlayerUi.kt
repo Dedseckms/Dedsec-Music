@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 @Composable internal fun FullPlayer(state: AppState, vm: MusicViewModel, addToPlaylist: (Song) -> Unit = {}, dismiss: () -> Unit) {
     val song = state.now ?: return
     var queue by remember { mutableStateOf(false) }
+    var lyrics by remember { mutableStateOf(false) }
     val queueMatches = state.coverQueue.any { it.queueIndex == state.queueIndex && it.song.id == song.id }
     val covers = if (queueMatches) state.coverQueue else listOf(ru.dedseckms.music.QueueCover(-1, song))
     val coverIndex = covers.indexOfFirst { it.queueIndex == state.queueIndex }.coerceAtLeast(0)
@@ -82,16 +83,17 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
                             Text(time(state.duration), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Row(Modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(vm::shuffle) { Icon(Icons.Rounded.Shuffle, "Перемешать", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                            if (!state.waveActive) IconButton(vm::shuffle) { Icon(Icons.Rounded.Shuffle, "Перемешать", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                             IconButton(vm::previous) { Icon(Icons.Rounded.SkipPrevious, "Предыдущий трек", Modifier.size(36.dp)) }
                             FilledIconButton(vm::togglePlay, shape = panelShape(24), modifier = Modifier.size(if (compact) 56.dp else 70.dp)) {
                                 if (state.buffering) CircularProgressIndicator(Modifier.size(30.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 3.dp)
                                 else Icon(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Пауза" else "Продолжить", Modifier.size(42.dp))
                             }
                             IconButton(vm::next) { Icon(Icons.Rounded.SkipNext, "Следующий трек", Modifier.size(36.dp)) }
-                            IconButton(vm::repeat) { Icon(Icons.Rounded.Repeat, "Повтор", tint = if (state.repeat != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                            IconButton(vm::repeat) { Icon(if (state.waveActive) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, if (state.waveActive) "Повторять один трек" else "Повтор очереди", tint = if (state.repeat != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton({ lyrics = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.Lyrics, "Текст песни", Modifier.size(20.dp)) }
                             IconButton(vm::dislike, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.ThumbDownOffAlt, "Не моё", Modifier.size(20.dp)) }
                             FilledTonalButton({ addToPlaylist(song) }, contentPadding = PaddingValues(horizontal = 10.dp), modifier = Modifier.weight(1.15f).testTag("player-add-playlist")) {
                                 Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null, Modifier.size(20.dp)); Spacer(Modifier.width(5.dp)); Text("В плейлист", maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -108,6 +110,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
                 }
             }
         }
+        if (lyrics) key(state.username, song.id) { LyricsDialog(song, state.position, vm.lyricsApi(), vm.lyricsCache(song), vm::seek) { lyrics = false } }
         if (queue) ModalBottomSheet({ queue = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
                 item { Text("Очередь воспроизведения", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp)) }

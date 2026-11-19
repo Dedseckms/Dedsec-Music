@@ -116,7 +116,7 @@ class MusicService : MediaLibraryService() {
             }
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) { prefetchArtwork() }
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) { prefetchArtwork() }
-            override fun onRepeatModeChanged(repeatMode: Int) { prefetchArtwork() }
+            override fun onRepeatModeChanged(repeatMode: Int) { if (mixActive && repeatMode == Player.REPEAT_MODE_ALL) player.repeatMode = Player.REPEAT_MODE_ONE; prefetchArtwork() }
         })
         scope.launch {
             val offlineGate = ru.dedseckms.music.data.OfflineListenGate()
@@ -311,6 +311,8 @@ class MusicService : MediaLibraryService() {
                 queueWindow = window; queueAccount = account
                 queueSource = request.source
                 mixActive = request.mix; currentMixMode = request.mode; currentMixMood = request.mood; mixAccount = if (request.mix) account else null
+                if (request.mix) player.shuffleModeEnabled = false
+                if (request.mix || player.repeatMode == Player.REPEAT_MODE_ONE) player.repeatMode = Player.REPEAT_MODE_OFF
                 MediaSession.MediaItemsWithStartPosition(window.initial.map { resolve(it, account) }, window.initialIndex, 0)
             }
         }
@@ -326,7 +328,7 @@ class MusicService : MediaLibraryService() {
         }
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, command: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
             val code = if (controller.uid != applicationInfo.uid) SessionError.ERROR_PERMISSION_DENIED else when (command.customAction) {
-                SHUFFLE_COMMAND -> { player.shuffleModeEnabled = !player.shuffleModeEnabled; publishNavigation(); SessionResult.RESULT_SUCCESS }
+                SHUFFLE_COMMAND -> { if (!mixActive) player.shuffleModeEnabled = !player.shuffleModeEnabled; publishNavigation(); SessionResult.RESULT_SUCCESS }
                 NEXT_COMMAND -> { sessionSkip(player, true); SessionResult.RESULT_SUCCESS }
                 PREVIOUS_COMMAND -> { sessionSkip(player, false); SessionResult.RESULT_SUCCESS }
                 else -> SessionError.ERROR_NOT_SUPPORTED
@@ -393,6 +395,8 @@ class MusicService : MediaLibraryService() {
                     queueWindow = null; queueAccount = null
                     queueSource = if (wave) "" else extras?.getString("playbackSource").orEmpty()
                     mixActive = wave || extras?.getBoolean("mix") == true
+                    if (mixActive) player.shuffleModeEnabled = false
+                    if (mixActive || player.repeatMode == Player.REPEAT_MODE_ONE) player.repeatMode = Player.REPEAT_MODE_OFF
                     currentMixMode = mode; currentMixMood = mood; mixAccount = if (mixActive) account else null
                     songs.map { resolve(it, account) }.toMutableList()
                 }

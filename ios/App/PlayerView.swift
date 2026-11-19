@@ -6,11 +6,13 @@ struct PlayerView: View {
     @EnvironmentObject private var store: MusicStore
     @Environment(\.dismiss) private var dismiss
     @State private var add = false
+    @State private var lyrics = false
     @State private var dragged: Double?
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 8) {
                 HStack { Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 36, height: 36) }; Spacer(); Text(store.source).font(.caption).lineLimit(1); Spacer(); Color.clear.frame(width: 36, height: 36) }
+                Button { lyrics = true } label: { Label("Текст песни", systemImage: "quote.bubble").font(.subheadline) }
                 Spacer(minLength: 0)
                 let side = min(geometry.size.width - 48, max(100, geometry.size.height - 420), 360)
                 Artwork(id: store.now?.coverArt, size: side)
@@ -26,7 +28,7 @@ struct PlayerView: View {
                     HStack { Text(time(dragged ?? store.position)); Spacer(); Text(time(store.duration)) }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 24) {
-                    Button { store.shuffle() } label: { Image(systemName: "shuffle").foregroundStyle(store.shuffled ? Color.accentColor : .secondary) }
+                    if !store.waveActive { Button { store.shuffle() } label: { Image(systemName: "shuffle").foregroundStyle(store.shuffled ? Color.accentColor : .secondary) } }
                     Button { store.skip(false) } label: { Image(systemName: "backward.end.fill").font(.title) }
                     Button { store.toggle() } label: { ZStack { RoundedRectangle(cornerRadius: 22).fill(Color.accentColor).frame(width: 72, height: 64); if store.buffering { ProgressView().tint(.black) } else { Image(systemName: store.playing ? "pause.fill" : "play.fill").font(.title).foregroundStyle(.black) } } }
                     Button { store.skip(true) } label: { Image(systemName: "forward.end.fill").font(.title) }
@@ -40,9 +42,10 @@ struct PlayerView: View {
                         else { Button { Task { await store.download(now) } } label: { if store.downloading == now.id { ProgressView() } else { Image(systemName: "arrow.down.circle").font(.title3) } } }
                     }
                 }
+                Button { lyrics = true } label: { Label("Текст песни", systemImage: "quote.bubble").font(.subheadline) }
                 Spacer(minLength: 0)
             }.padding(.horizontal, 24).padding(.bottom, 12)
-        }.background(Color(.systemBackground)).sheet(isPresented: $add) { if let now = store.now { PlaylistPicker(song: now) } }
+        }.background(Color(.systemBackground)).sheet(isPresented: $add) { if let now = store.now { PlaylistPicker(song: now) } }.sheet(isPresented: $lyrics) { LyricsView().environmentObject(store) }
     }
     private func time(_ seconds: Double) -> String { let value = max(0, Int(seconds)); return String(format: "%d:%02d", value / 60, value % 60) }
 }
@@ -78,7 +81,7 @@ struct SettingsView: View {
                     Link(destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/releases")!) { Label("Версии на GitHub", systemImage: "arrow.up.right.square") }
                     Text("Новую IPA установи через AltStore. Бесплатная подпись Apple требует регулярного обновления.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.2").font(.caption).foregroundStyle(.secondary)
+                Section { Link("Лицензия GPL-3.0-or-later", destination: URL(string: "https://github.com/Dedseckms/Dedsec-Music/blob/main/LICENSE")!); Text("DedSec Music · iOS 0.1.3").font(.caption).foregroundStyle(.secondary)
                     Button("Выйти из аккаунта", role: .destructive) { store.logout(); dismiss() }
                 }
             }.navigationTitle("Настройки").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }

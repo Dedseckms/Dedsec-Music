@@ -179,6 +179,10 @@ POST `/api/resources?source=Uploads&path=/name.mp3&override=false` приним�
 не монтирует их и не удаляет исходные треки; переключение путей выполняется
 отдельно после проверки копии.
 
+Единый вход для загрузки файлов и ленивый поиск исходных текстов песен описаны в
+[MEDIA_API.md](MEDIA_API.md). Внешний поиск выполняется фоновым worker и не
+блокирует воспроизведение; отдельный сервер для новых клиентов не нужен.
+
 ```bash
 python3.12 -m venv .tools/test-venv
 .tools/test-venv/bin/pip install --require-hashes --only-binary=:all: -r api/requirements.txt

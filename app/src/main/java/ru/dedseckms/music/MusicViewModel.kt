@@ -58,7 +58,7 @@ data class AppState(
     val queueStart: Int = 0, val queueIndex: Int = 0, val coverQueue: List<QueueCover> = emptyList(),
     val mixMood: MixMood = MixMood.ANY, val mixMode: MixMode = MixMode.BALANCED, val mixLoading: Boolean = false,
     val downloads: Map<String, Transfer> = emptyMap(), val uploads: List<Transfer> = emptyList(),
-    val uploadConnected: Boolean = false, val serverDisk: ServerDisk? = null,
+    val uploadConnected: Boolean = false, val unifiedUpload: Boolean = false, val serverDisk: ServerDisk? = null,
     val checkingUploads: Boolean = false, val scanActive: Boolean = false, val uploadCheckError: String? = null,
     val visualStyle: String = "material", val palette: String = "blue",
     val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false, val isAdmin: Boolean = false,
@@ -120,6 +120,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun onAppResume() { if (state.value.loggedIn && !state.value.demo) { refreshProfile(); refreshImport() } }
     fun adminApi(): ProfileApi? = if (state.value.isAdmin && !state.value.demo) app.profileApi() else null
+    fun lyricsApi(): ProfileApi? = if (state.value.demo) null else app.profileApi()
+    fun lyricsCache(song: Song): java.io.File? = app.credentials.activeId()?.let { java.io.File(app.filesDir, "accounts/$it/lyrics/${sha256(song.id)}.json") }
+    fun refreshUploadConnection() {
+        val account = app.credentials.activeId() ?: return; val revision = generation
+        val profile = app.profileApi() ?: return
+        accountJobs += viewModelScope.launch {
+            val ready = try { profile.await { capabilities() } } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+            if (revision == generation && app.credentials.activeId() == account) mutable.update { it.copy(unifiedUpload = ready, uploadConnected = ready || app.credentials.upload(account) != null) }
+        }
+    }
     fun refreshImport() {
         if (!state.value.loggedIn || state.value.demo) return
         val profile = app.profileApi() ?: return
@@ -535,8 +545,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         player.sendCustomCommand(SessionCommand(if (forward) NEXT_COMMAND else PREVIOUS_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
     }
     fun seek(position: Long) { controller?.seekTo(position) }
-    fun shuffle() { mixTask.cancel(); mutable.update { it.copy(mixLoading = false) }; controller?.sendCustomCommand(SessionCommand(SHUFFLE_COMMAND, Bundle.EMPTY), Bundle.EMPTY) }
-    fun repeat() { controller?.let { it.repeatMode = if (it.repeatMode == Player.REPEAT_MODE_OFF) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF } }
+    fun shuffle() { if (state.value.waveActive) return; mixTask.cancel(); mutable.update { it.copy(mixLoading = false) }; controller?.sendCustomCommand(SessionCommand(SHUFFLE_COMMAND, Bundle.EMPTY), Bundle.EMPTY) }
+    fun repeat() { controller?.let { it.repeatMode = if (it.repeatMode == Player.REPEAT_MODE_OFF) (if (state.value.waveActive) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL) else Player.REPEAT_MODE_OFF } }
     fun dislike() { state.value.now?.let { song ->
         local()?.dislike(song.id)
         val profile = app.profileApi(); val position = state.value.position; val duration = state.value.duration
@@ -690,6 +700,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
     private fun observeWork(account: String) {
         accountJobs.forEach(Job::cancel); accountJobs.clear()
+        refreshUploadConnection()
         accountJobs += viewModelScope.launch {
             var completed: Set<java.util.UUID>? = null
             work.getWorkInfosByTagFlow("downloads-$account").conflate().sample(500).collect { entries ->
@@ -785,7 +796,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 name = UploadApi.safeFilename(name)
                 val request = OneTimeWorkRequestBuilder<UploadWorker>()
-                    .setInputData(workDataOf("account" to account, "uri" to uri.toString(), "name" to name, "size" to size))
+                    .setInputData(workDataOf("account" to account, "uri" to uri.toString(), "name" to name, "size" to size, "unified" to state.value.unifiedUpload))
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .addTag("uploads-$account").addTag("name:$name").build()
                 work.enqueueUniqueWork("upload-$account-${sha256(uri.toString())}", ExistingWorkPolicy.KEEP, request)

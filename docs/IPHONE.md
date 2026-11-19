@@ -5,7 +5,7 @@
 ## Установка с Windows
 
 1. Установи AltServer и AltStore Classic по [официальной инструкции для Windows](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows). Используй указанные там версии iTunes и iCloud.
-2. Скачай [`DedSec-Music-0.1.2-ios-unsigned.ipa`](https://github.com/Dedseckms/Dedsec-Music/releases/download/ios-v0.1.2/DedSec-Music-0.1.2-ios-unsigned.ipa) из [выпуска iPhone Preview](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.2).
+2. Скачай [`DedSec-Music-0.1.3-ios-unsigned.ipa`](https://github.com/Dedseckms/Dedsec-Music/releases/download/ios-v0.1.3/DedSec-Music-0.1.3-ios-unsigned.ipa) из [выпуска iPhone Preview](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.3).
 3. Открой IPA через AltStore. AltStore подпишет приложение твоим Apple ID и установит его на телефон. Пароль Apple вводится только в установленный AltStore/AltServer; музыкальному серверу он не нужен.
 4. В DedSec Music введи HTTPS-адрес своего Navidrome, логин и пароль музыкального аккаунта. Для загрузки файлов используется отдельный аккаунт загрузчика.
 

@@ -40,11 +40,13 @@ struct AddMusicView: View {
                 Button("Обновить статус", systemImage: "arrow.clockwise") { store.refreshImport() }.disabled(store.importBusy)
             }
             Section("Загрузить свой файл") {
+                if !store.unifiedUploads {
                 TextField("HTTPS-адрес загрузчика", text: $uploadServer).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Логин загрузки", text: $uploadUser).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField("Пароль загрузки", text: $uploadPassword)
-                Text("До 100 МБ и до 20 минут. Сервер проверяет фактическое аудио; пароль загрузки вводится отдельно.").font(.caption).foregroundStyle(.secondary)
-                Button { pick = true } label: { Label("Выбрать аудиофайл", systemImage: "doc.badge.plus") }.disabled(store.uploading || uploadPassword.isEmpty || uploadUser.isEmpty || uploadServer.isEmpty)
+                }
+                Text("До 100 МБ и до 20 минут. Вход в загрузку выполняется музыкальным аккаунтом, если сервер поддерживает единый вход.").font(.caption).foregroundStyle(.secondary)
+                Button { pick = true } label: { Label("Выбрать аудиофайл", systemImage: "doc.badge.plus") }.disabled(store.uploading || (!store.unifiedUploads && (uploadPassword.isEmpty || uploadUser.isEmpty || uploadServer.isEmpty)))
                 if store.uploading { ProgressView("Загружаем на сервер") }
             }
         }.navigationTitle("Добавить музыку").task {
@@ -53,7 +55,7 @@ struct AddMusicView: View {
                 let music = store.account?.server ?? MusicAPI.defaultServer
                 uploadServer = music.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == MusicAPI.defaultServer ? MusicAPI.defaultUploadServer : music
             }
-            store.refreshImport()
+            store.refreshImport(); await store.refreshUploadConnection()
         }
         .fileImporter(isPresented: $pick, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
             switch result {
