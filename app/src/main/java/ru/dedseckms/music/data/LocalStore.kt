@@ -108,25 +108,50 @@ class LocalStore(private val context: Context, val accountId: String) {
         save("favorites-pending.json", data)
     }
     fun wifiOnly(): Boolean = prefs.getBoolean("wifi_only", true)
+    fun offlinePreferences() = OfflinePreferences(prefs.getBoolean("auto_listened", false), prefs.getBoolean("auto_favorites", false))
+    fun offlinePreferences(value: OfflinePreferences) { prefs.edit().putBoolean("auto_listened", value.afterListen).putBoolean("auto_favorites", value.onFavorite).apply() }
+    private fun queueDirectory() = File(directory, "download-queue").apply { mkdirs() }
+    fun pendingDownloads(): List<Song> = queueDirectory().listFiles().orEmpty().filter { it.extension == "json" }.mapNotNull {
+        try { Song.parse(JSONObject(it.readText())) } catch (_: Exception) { null }
+    }
+    fun queueDownload(song: Song) = synchronized(lock) {
+        val folder = queueDirectory()
+        val file = File(folder, "${sha256(song.id)}.json")
+        if (!file.isFile) {
+            val temp = File.createTempFile("queue-", ".tmp", folder)
+            try { temp.writeText(song.json().toString()); check(temp.renameTo(file)) } finally { temp.delete() }
+        }
+    }
+    fun finishDownload(id: String) = synchronized(lock) { File(queueDirectory(), "${sha256(id)}.json").delete(); Unit }
     fun trackGain(id: String): Int = prefs.getInt("gain_${sha256(id)}", 0).coerceIn(-6, 6)
     fun trackGain(id: String, decibels: Int) { prefs.edit().putInt("gain_${sha256(id)}", decibels.coerceIn(-6, 6)).apply() }
     fun wifiOnly(value: Boolean) { prefs.edit().putBoolean("wifi_only", value).apply() }
     fun audioFile(id: String): File = File(directory, "offline/${sha256(id)}.audio").also { it.parentFile?.mkdirs() }
-    fun offline(): List<Song> = json("offline.json").optJSONArray("entries").objects().mapNotNull { value ->
-        val song = try { Song.parse(value.getJSONObject("song")) } catch (_: Exception) { return@mapNotNull null }
+    private fun offlineIndex() = File(directory, "offline-index").apply { mkdirs() }
+    private fun offlineRecord(value: JSONObject): Song? {
+        val song = try { Song.parse(value.getJSONObject("song")) } catch (_: Exception) { return null }
         val file = audioFile(song.id)
-        song.takeIf { file.isFile && file.length() > 0 && file.length() == value.optLong("bytes") }
+        return song.takeIf { file.isFile && file.length() > 0 && file.length() == value.optLong("bytes") }
     }
+    fun offline(): List<Song> {
+        val current = offlineIndex().listFiles().orEmpty().filter { it.extension == "json" }.mapNotNull {
+            try { offlineRecord(JSONObject(it.readText())) } catch (_: Exception) { null }
+        }
+        val legacy = json("offline.json").optJSONArray("entries").objects().mapNotNull(::offlineRecord)
+        return (current + legacy).distinctBy(Song::id)
+    }
+    fun offlineSong(id: String): Song? = try { offlineRecord(JSONObject(File(offlineIndex(), "${sha256(id)}.json").readText())) } catch (_: Exception) { null }
     fun downloaded(song: Song, bytes: Long) = synchronized(lock) {
-        val entries = json("offline.json").optJSONArray("entries").objects().filterNot { it.optJSONObject("song")?.optString("id") == song.id }
-        val added = JSONObject().put("song", song.json()).put("bytes", bytes)
-        save("offline.json", JSONObject().put("entries", JSONArray(entries + added)))
+        val temp = File.createTempFile("offline-", ".tmp", offlineIndex())
+        try {
+            temp.writeText(JSONObject().put("song", song.json()).put("bytes", bytes).toString())
+            check(temp.renameTo(File(offlineIndex(), "${sha256(song.id)}.json")))
+        } finally { temp.delete() }
     }
     fun removeDownload(id: String) = synchronized(lock) {
         val file = audioFile(id)
         if (file.exists() && !file.delete()) error("Не удалось удалить офлайн-файл")
-        val entries = json("offline.json").optJSONArray("entries").objects().filterNot { it.optJSONObject("song")?.optString("id") == id }
-        save("offline.json", JSONObject().put("entries", JSONArray(entries)))
+        File(offlineIndex(), "${sha256(id)}.json").delete(); Unit
     }
     companion object { private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>() }
 }

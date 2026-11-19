@@ -23,7 +23,9 @@ class AccountDataSource(private val app: MusicApp) : DataSource {
         if (dataSpec.uri.scheme != "dedsec" || dataSpec.uri.host != credentials.accountId) throw IOException("Аккаунт воспроизведения изменился")
         val id = dataSpec.uri.lastPathSegment ?: throw IOException("Нет идентификатора трека")
         val store = LocalStore(app, credentials.accountId)
-        val offline = store.offline().any { it.id == id }
+        // Published audio files are atomically renamed only after validation. No full-library scan here.
+        val localAudio = store.audioFile(id)
+        val offline = localAudio.isFile && localAudio.length() > 0
         val target: Uri
         val source: DataSource
         if (offline) {

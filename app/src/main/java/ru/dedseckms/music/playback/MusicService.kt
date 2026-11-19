@@ -119,14 +119,25 @@ class MusicService : MediaLibraryService() {
             override fun onRepeatModeChanged(repeatMode: Int) { prefetchArtwork() }
         })
         scope.launch {
+            val offlineGate = ru.dedseckms.music.data.OfflineListenGate()
             while (true) {
                 delay(1000)
+                val active = app.credentials.active()
+                val currentSong = player.currentMediaItem?.let(::songFromItem)
+                if (active != null && currentSong != null && player.currentMediaItem?.localConfiguration?.uri?.host == active.accountId &&
+                    offlineGate.observe("${active.accountId}:${currentSong.id}", player.isPlaying, player.currentPosition, currentSong.duration * 1000L, android.os.SystemClock.elapsedRealtime())) {
+                    if (LocalStore(this@MusicService, active.accountId).offlinePreferences().afterListen) scope.launch {
+                        try { ru.dedseckms.music.data.OfflineDownloads.enqueue(this@MusicService, active.accountId, listOf(currentSong)) }
+                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (_: Exception) { /* Automatic copies never interrupt playback. */ }
+                    }
+                }
                 if (player.isPlaying && !recordedTransition && player.currentPosition > 30_000) {
                     val song = player.currentMediaItem?.let(::songFromItem)
                     val credentials = app.credentials.active()
                     if (song != null && credentials != null && player.currentMediaItem?.localConfiguration?.uri?.host == credentials.accountId) {
                         recordedTransition = true
-                        withContext(Dispatchers.IO) {
+                        scope.launch(Dispatchers.IO) {
                             LocalStore(this@MusicService, credentials.accountId).record(song)
                             runCatching { NavApi(credentials).scrobble(song.id) }
                         }

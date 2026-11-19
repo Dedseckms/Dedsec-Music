@@ -498,6 +498,11 @@ internal fun SongRow(song: Song, state: AppState, play: () -> Unit, menu: () -> 
                 FilledTonalButton({ vm.play(page.songs.shuffled(), source = collectionSource(page.kind, page.title)) }, enabled = page.songs.isNotEmpty(), modifier = Modifier.height(52.dp)) { Icon(Icons.Rounded.Shuffle, "Перемешать") }
             }
         }
+        if (page.songs.isNotEmpty() && page.kind != "offline") item {
+            OutlinedButton({ vm.downloadAll(page.songs) }, enabled = !state.downloadQueueBusy, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Rounded.Download, null); Spacer(Modifier.width(8.dp)); Text("Скачать список · ${page.songs.size}")
+            }
+        }
         if (page.songs.isEmpty()) item { EmptyCard("Здесь пока тихо", "Добавь треки из поиска или медиатеки.", Icons.Rounded.MusicNote) }
         itemsIndexed(page.songs, key = { index, song -> "$index:${song.id}" }) { index, song -> SongRow(song, state, { vm.play(page.songs, index, source = collectionSource(page.kind, page.title)) }, { menu(song, index) }) }
         if (page.kind == "genre" && state.pageMore) item { OutlinedButton(vm::moreGenre, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) { Text("Ещё треки") } }
@@ -554,15 +559,23 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
 
 @Composable private fun SettingsSheet(state: AppState, vm: MusicViewModel, dismiss: () -> Unit) {
     var admin by remember { mutableStateOf(false) }
+    var serverDashboard by remember { mutableStateOf(false) }
+    if (serverDashboard && state.isAdmin) vm.adminApi()?.let { api -> ServerDashboard(api) { serverDashboard = false } }
     if (admin && state.isAdmin) vm.adminApi()?.let { api -> AdminDialog(api) { admin = false } }
     ModalBottomSheet(dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Настройки", style = MaterialTheme.typography.headlineMedium)
             ProfileControls(state, vm)
             if (state.isAdmin) OutlinedButton({ admin = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.ManageAccounts, null); Spacer(Modifier.width(8.dp)); Text("Пользователи и их загрузки") }
+            if (state.isAdmin) OutlinedButton({ serverDashboard = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Dns, null); Spacer(Modifier.width(8.dp)); Text("Сервер и диски") }
             AppearanceControls(state, vm)
             HorizontalDivider()
-            PreferenceSwitch("Скачивать по Wi-Fi", "Для сохранения музыки на телефон", state.wifiOnly, vm::wifiOnly)
+            PreferenceSwitch("Только по Wi-Fi", "Применяется и к уже добавленной очереди", state.wifiOnly, vm::wifiOnly)
+            PreferenceSwitch("Скачивать прослушанное", "После прослушивания 80% трека", state.autoOffline.afterListen, { vm.autoOffline(afterListen = it) })
+            PreferenceSwitch("Скачивать любимое", "При добавлении трека в «Мне нравится»", state.autoOffline.onFavorite, { vm.autoOffline(onFavorite = it) })
+            OutlinedButton({ vm.downloadAll(state.favorites) }, enabled = !state.downloadQueueBusy && state.favorites.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Rounded.Download, null); Spacer(Modifier.width(8.dp)); Text("Скачать всё любимое · ${state.favorites.size}")
+            }
             Text("${state.offline.size} треков доступны офлайн", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ListItem(headlineContent = { Text("Android Auto") }, supportingContent = { Text("Плейлисты, любимое и моя волна") }, leadingContent = { Icon(Icons.Rounded.DirectionsCar, null) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent))

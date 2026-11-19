@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import kotlinx.coroutines.*
 
 fun main(args: Array<String>) {
+    args.firstOrNull { it.startsWith("--render-dashboard=") }?.let { renderDashboardPreview(java.nio.file.Path.of(it.substringAfter('='))); return }
     if ("--update-probe" in args) {
         val offer = UpdateClient().check(currentVersion = "0.0.0") ?: error("No signed Windows release available")
         println("Signed update probe OK: ${offer.version}")

@@ -131,6 +131,7 @@ internal fun ArtistScreen(profile: ArtistProfile, state: AppState, vm: MusicView
             Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Слушать исполнителя")
         } }
         if (profile.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (profile.songs.isNotEmpty()) item { OutlinedButton({ vm.downloadAll(profile.songs) }, enabled = !state.downloadQueueBusy, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Download, null); Spacer(Modifier.width(8.dp)); Text("Скачать треки исполнителя · ${profile.songs.size}") } }
         profile.error?.let { error -> item { ErrorCard(error) { vm.openArtist(profile.artist) } } }
         if (profile.albums.isNotEmpty()) {
             item { SectionHeader("Альбомы") }

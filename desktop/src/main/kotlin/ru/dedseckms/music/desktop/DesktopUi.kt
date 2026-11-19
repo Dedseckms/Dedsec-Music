@@ -111,6 +111,12 @@ private val LocalSample = staticCompositionLocalOf { false }
                     Column(Modifier.weight(1f).fillMaxHeight().glassPanel(Rounded, MaterialTheme.colorScheme.surfaceContainerLow)) {
                         Header(c, s)
                         if (s.busy || s.searching) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp)) else Spacer(Modifier.height(2.dp))
+                        if (s.downloadIds.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Rounded.Download, null, Modifier.size(18.dp)); Text(if (s.downloadsPaused) " Очередь приостановлена · ${s.downloadIds.size}" else " Скачивание · в очереди ${s.downloadIds.size}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium); if (s.downloadsPaused) TextButton(c::resumeDownloads) { Text("Продолжить") } }
+                                if (!s.downloadsPaused) LinearProgressIndicator(progress = { s.downloadProgress / 100f }, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
                         val songs = when { s.page != null -> s.page.songs; s.tab == "Любимое" -> s.favorites; s.tab == "Скачанное" -> s.offline; s.tab == "Поиск" && s.query.isNotBlank() -> s.search.songs; else -> s.songs }
                         val source = s.page?.let { collectionSource(it.kind, it.title) } ?: s.tab
                         when {
@@ -245,6 +251,7 @@ private val LocalSample = staticCompositionLocalOf { false }
     val page = s.page ?: return
     LazyColumn(contentPadding = PaddingValues(horizontal = 26.dp, vertical = 10.dp)) {
         item { Row(Modifier.padding(bottom = 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) { Cover(songs.firstOrNull()?.coverArt.orEmpty(), page.title, Modifier.size(138.dp), 28); Column { Text(when (page.kind) { "playlist" -> "ЛИЧНЫЙ ПЛЕЙЛИСТ"; "album" -> "АЛЬБОМ"; "artist" -> "ИСПОЛНИТЕЛЬ"; else -> "КОЛЛЕКЦИЯ" }, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp, letterSpacing = 2.sp); Text(page.title, style = MaterialTheme.typography.headlineMedium); Text("${songs.size} треков", color = MaterialTheme.colorScheme.onSurfaceVariant); Button({ c.play(songs, source = source) }, enabled = songs.isNotEmpty(), modifier = Modifier.padding(top = 12.dp)) { Icon(Icons.Rounded.PlayArrow, null); Text("Слушать") } } } }
+        if (songs.isNotEmpty() && page.kind != "offline") item { OutlinedButton({ c.downloadAll(songs) }) { Icon(Icons.Rounded.Download, null); Text(" Скачать список · ${songs.size}") } }
         itemsIndexed(songs, key = { i, song -> "$i:${song.id}" }) { i, song -> TrackRow(song, i, s, { c.play(songs, i, source) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, if (page.playlist?.readOnly == false) ({ remove(i) }) else null) }
     }
 }
@@ -259,7 +266,7 @@ private val LocalSample = staticCompositionLocalOf { false }
         IconButton(favorite, Modifier.size(30.dp)) { Icon(if (s.favorites.any { it.id == song.id }) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Нравится", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary) }
         Box { IconButton({ menu = true }, Modifier.size(28.dp)) { Icon(Icons.Rounded.MoreHoriz, "Меню трека", Modifier.size(19.dp)) }; DropdownMenu(menu, { menu = false }) {
             DropdownMenuItem({ Text("В плейлист") }, { menu = false; add() }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null) })
-            DropdownMenuItem({ Text(if (s.offline.any { it.id == song.id }) "Уже скачано" else "Скачать") }, { menu = false; download() }, enabled = s.offline.none { it.id == song.id }, leadingIcon = { Icon(Icons.Rounded.Download, null) })
+            DropdownMenuItem({ Text(if (s.offline.any { it.id == song.id }) "Уже скачано" else if (song.id in s.downloadIds) "В очереди" else "Скачать") }, { menu = false; download() }, enabled = s.offline.none { it.id == song.id } && song.id !in s.downloadIds, leadingIcon = { Icon(Icons.Rounded.Download, null) })
             remove?.let { DropdownMenuItem({ Text("Убрать из плейлиста") }, { menu = false; it() }, leadingIcon = { Icon(Icons.Rounded.RemoveCircleOutline, null) }) }
         } }
     }
@@ -329,10 +336,13 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
 @Composable private fun Settings(c: DesktopController, s: DesktopState) {
     val updates by c.updates.collectAsState()
     var admin by remember { mutableStateOf(false) }
+    var serverDashboard by remember { mutableStateOf(false) }
+    if (serverDashboard && s.isAdmin) c.adminApi()?.let { api -> ServerDashboard(api) { serverDashboard = false } }
     if (admin && s.isAdmin) c.adminApi()?.let { api -> AdminDialog(api) { admin = false } }
     LazyColumn(contentPadding = PaddingValues(26.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Section("Твоя территория", "НАСТРОЙКИ") }
         if (s.isAdmin) item { OutlinedButton({ admin = true }) { Icon(Icons.Rounded.ManageAccounts, null); Spacer(Modifier.width(8.dp)); Text("Пользователи и их загрузки") } }
+        if (s.isAdmin) item { OutlinedButton({ serverDashboard = true }) { Icon(Icons.Rounded.Dns, null); Spacer(Modifier.width(8.dp)); Text("Сервер и диски") } }
         item { Surface(shape = Rounded, color = MaterialTheme.colorScheme.surfaceContainer) { Row(Modifier.fillMaxWidth().padding(22.dp), verticalAlignment = Alignment.CenterVertically) { Avatar(s, Modifier.size(68.dp)); Spacer(Modifier.width(20.dp)); Column(Modifier.weight(1f)) { Text(s.username, style = MaterialTheme.typography.titleLarge); Text("Личные плейлисты · общая музыка", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; OutlinedButton({ val chooser = JFileChooser(); if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION && Files.size(chooser.selectedFile.toPath()) <= 5_000_000) c.avatar(Files.readAllBytes(chooser.selectedFile.toPath())) }) { Text("Аватарка") } } } }
         item { Section("Оформление") }
         item {
@@ -351,6 +361,15 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
         }
         item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(s.dark && !s.amoled, { c.amoled(false); c.theme(true, s.palette) }, { Text("Тёмная") }); FilterChip(!s.dark, { c.theme(false, s.palette) }, { Text("Светлая") }); FilterChip(s.amoled, { c.amoled(true) }, { Text("AMOLED") }, leadingIcon = { Icon(Icons.Rounded.DarkMode, null, Modifier.size(16.dp)) }) } }
         item { LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { items(listOf("blue" to "Синий", "violet" to "Сирень", "mint" to "Мята", "rose" to "Роза", "amber" to "Янтарь", "lagoon" to "Лагуна")) { (value, label) -> FilterChip(s.palette == value, { c.theme(s.dark, value) }, { Text(label) }) } } }
+        item { Section("Офлайн-музыка") }
+        item { Surface(shape = Rounded, color = MaterialTheme.colorScheme.surfaceContainer) {
+            Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Скачивать прослушанное"); Text("После прослушивания 80% трека", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(s.autoOffline.afterListen, { c.autoOffline(afterListen = it) }) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Скачивать любимое"); Text("При добавлении в «Мне нравится»", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(s.autoOffline.onFavorite, { c.autoOffline(onFavorite = it) }) }
+                Text("На компьютере: ${s.offline.size} · В очереди: ${s.downloadIds.size}", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton({ c.downloadAll(s.favorites) }, enabled = s.favorites.isNotEmpty()) { Icon(Icons.Rounded.Download, null); Text(" Скачать всё любимое") }
+            }
+        } }
         item { Section("Обновления") }
         item {
             Text(updates.message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)

@@ -3,7 +3,9 @@
 import contextlib
 import datetime
 import json
+import os
 from pathlib import Path, PurePosixPath
+import stat
 import sqlite3
 import time
 
@@ -77,6 +79,31 @@ class Catalog:
             info=path.stat()
             return path,info.st_size,info.st_mtime_ns
         except OSError:return None
+
+    def physicals(self,songs):
+        """Fresh one-stat lookups sharing verified parent descriptors; never follow file symlinks."""
+        if os.name!='posix':return {key:value for key,song in songs.items() if (value:=self.physical(song)) is not None}
+        groups={};result={}
+        for key,song in songs.items():
+            root=self.roots.get(str(song['library_id']));value=song.get('path')
+            if root is None or not isinstance(value,str) or '\\' in value:continue
+            relative=PurePosixPath(value)
+            if relative.is_absolute() or '..' in relative.parts or not relative.name:continue
+            groups.setdefault((root,relative.parent),[]).append((key,relative))
+        for (root,parent),items in groups.items():
+            folder=root/parent
+            try:
+                if folder.is_symlink() or folder.resolve()!=folder or (folder!=root and root not in folder.parents):continue
+                descriptor=os.open(folder,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                try:
+                    for key,relative in items:
+                        try:
+                            info=os.stat(relative.name,dir_fd=descriptor,follow_symlinks=False)
+                            if stat.S_ISREG(info.st_mode):result[key]=(root/relative,info.st_size,info.st_mtime_ns)
+                        except OSError:continue
+                finally:os.close(descriptor)
+            except OSError:continue
+        return result
 
 
 def dto(song):

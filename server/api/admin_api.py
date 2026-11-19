@@ -217,6 +217,9 @@ def dispatch(handler, chunks):
         identity = profile.authenticate(handler.headers)
         user, _ = profile.native(identity['token'], '/api/user/' + identity['id'])
         if user.get('id') != identity['id'] or user.get('isAdmin') is not True: raise AdminError(403, 'ADMIN_REQUIRED')
+        import system_admin
+        if system_admin.owned_route(parsed.path):
+            return system_admin.dispatch_authorized(handler,chunks,identity)
         if SERVICE is None: raise AdminError(503, 'ADMIN_UNAVAILABLE')
         route = parsed.path[len(PREFIX):]
         query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)

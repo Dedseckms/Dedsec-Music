@@ -1,3 +1,4 @@
+@file:OptIn(kotlinx.coroutines.FlowPreview::class)
 @file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 package ru.dedseckms.music
 
@@ -62,6 +63,7 @@ data class AppState(
     val visualStyle: String = "material", val palette: String = "blue",
     val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false, val isAdmin: Boolean = false,
     val libraryTotal: Int? = null,
+    val autoOffline: OfflinePreferences = OfflinePreferences(), val downloadQueueBusy: Boolean = false,
     val wifiOnly: Boolean = true, val theme: String = "system", val dynamicColor: Boolean = true,
 )
 
@@ -100,7 +102,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         app.credentials.active()?.let { account ->
             mutable.update { it.copy(loggedIn = true, username = account.username, songs = local()!!.cachedSongs(), offline = local()!!.offline(),
                 history = local()!!.history(), favorites = local()!!.cachedFavorites(), favoriteIds = local()!!.cachedFavorites().map { song -> song.id }.toSet(),
-                wifiOnly = local()!!.wifiOnly(), uploadConnected = app.credentials.upload(account.accountId) != null) }
+                wifiOnly = local()!!.wifiOnly(), autoOffline = local()!!.offlinePreferences(), uploadConnected = app.credentials.upload(account.accountId) != null) }
             observeWork(account.accountId)
             restoreAvatar(account.accountId)
             refresh()
@@ -241,7 +243,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 app.accountChanges.tryEmit(Unit)
                 mutable.value = AppState(loggedIn = true, username = account.username,
                     songs = LocalStore(app, account.accountId).cachedSongs(), offline = LocalStore(app, account.accountId).offline(),
-                    history = LocalStore(app, account.accountId).history(), wifiOnly = LocalStore(app, account.accountId).wifiOnly(),
+                    history = LocalStore(app, account.accountId).history(), wifiOnly = LocalStore(app, account.accountId).wifiOnly(), autoOffline = LocalStore(app, account.accountId).offlinePreferences(),
                     favorites = LocalStore(app, account.accountId).cachedFavorites(), favoriteIds = LocalStore(app, account.accountId).cachedFavorites().map { it.id }.toSet(),
                     theme = state.value.theme, dynamicColor = state.value.dynamicColor, visualStyle = state.value.visualStyle, palette = state.value.palette,
                     uploadConnected = app.credentials.upload(account.accountId) != null)
@@ -555,6 +557,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(favoriteIds = if (enabled) it.favoriteIds + song.id else it.favoriteIds - song.id,
             favorites = if (enabled) (it.favorites + song).distinctBy(Song::id) else it.favorites.filterNot { track -> track.id == song.id }) }
         store.cacheFavorites(state.value.favorites)
+        if (enabled && state.value.autoOffline.onFavorite) {
+            val account = app.credentials.activeId()
+            if (account != null) viewModelScope.launch { try { OfflineDownloads.enqueue(app, account, listOf(song)) } catch (e: CancellationException) { throw e } catch (_: Exception) { toast("Лайк сохранён. Не удалось поставить трек на скачивание") } }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try { nav.setFavorite(song.id, enabled); store.favoriteSynced(song.id, enabled) }
             catch (_: Exception) { if (revision == generation) toast("Лайк сохранён на телефоне. Синхронизируем при следующем обновлении") }
@@ -639,23 +645,41 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (revision == generation) { applyPlaylistContents(contents); toast("Убрано из «${page.title}»") }
         }
     }
-    fun download(song: Song) {
+    fun download(song: Song) = downloadAll(listOf(song))
+    fun downloadAll(songs: List<Song>) {
         val account = app.credentials.activeId() ?: run { toast("Подключи сервер для скачивания"); return }
-        if (state.value.offline.any { it.id == song.id }) { toast("Трек уже скачан"); return }
-        if (state.value.downloads[song.id]?.state in setOf(WorkInfo.State.RUNNING, WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED)) { toast("Трек уже в очереди скачивания"); return }
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>().setInputData(workDataOf("account" to account, "song" to song.json().toString()))
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(if (state.value.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
-            .addTag("downloads-$account").addTag("track:${song.id}").addTag("created:${System.currentTimeMillis()}").build()
-        work.enqueueUniqueWork("offline-$account-${sha256(song.id)}", ExistingWorkPolicy.KEEP, request)
-        toast(if (state.value.wifiOnly) "В очереди скачивания по Wi-Fi" else "В очереди скачивания")
+        val revision = generation
+        if (state.value.downloadQueueBusy) return
+        mutable.update { it.copy(downloadQueueBusy = true) }
+        viewModelScope.launch {
+            try {
+                val count = OfflineDownloads.enqueue(app, account, songs)
+                if (revision == generation) toast(if (count == 0) "Треки уже скачаны или стоят в очереди" else "В очередь добавлено: $count")
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (revision == generation) toast("Не удалось добавить загрузки в очередь") }
+            finally { if (revision == generation) mutable.update { it.copy(downloadQueueBusy = false) } }
+        }
+    }
+    fun autoOffline(afterListen: Boolean = state.value.autoOffline.afterListen, onFavorite: Boolean = state.value.autoOffline.onFavorite) {
+        val value = OfflinePreferences(afterListen, onFavorite)
+        local()?.offlinePreferences(value); mutable.update { it.copy(autoOffline = value) }
     }
     fun removeOffline(song: Song) {
         local()?.removeDownload(song.id)
         mutable.update { it.copy(offline = local()?.offline().orEmpty(), page = it.page?.let { page -> if (page.kind == "offline") page.copy(songs = local()?.offline().orEmpty()) else page }) }
         toast("Офлайн-копия удалена с телефона")
     }
-    fun wifiOnly(value: Boolean) { local()?.wifiOnly(value); mutable.update { it.copy(wifiOnly = value) } }
+    fun wifiOnly(value: Boolean) {
+        local()?.wifiOnly(value); mutable.update { it.copy(wifiOnly = value) }
+        val account = app.credentials.activeId() ?: return
+        viewModelScope.launch {
+            try {
+                val unresolved = OfflineDownloads.updateNetwork(app, account)
+                if (app.credentials.activeId() == account) toast(if (unresolved == 0) "Условия сети применены ко всей очереди" else "Не удалось обновить $unresolved загрузок. Повтори при подключении к серверу")
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (app.credentials.activeId() == account) toast("Не удалось обновить очередь. Повтори переключение сети") }
+        }
+    }
     fun appearance(theme: String = state.value.theme, dynamic: Boolean = state.value.dynamicColor,
                    palette: String = state.value.palette, visualStyle: String = state.value.visualStyle) {
         val mode = theme.takeIf { it in setOf("system", "light", "dark", "amoled") } ?: "system"
@@ -667,11 +691,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeWork(account: String) {
         accountJobs.forEach(Job::cancel); accountJobs.clear()
         accountJobs += viewModelScope.launch {
-            work.getWorkInfosByTagFlow("downloads-$account").collect { entries ->
+            var completed: Set<java.util.UUID>? = null
+            work.getWorkInfosByTagFlow("downloads-$account").conflate().sample(500).collect { entries ->
                 if (app.credentials.activeId() != account) return@collect
                 val transfers = DownloadWork.current(entries).mapValues { (_, item) ->
                     Transfer("", item.progress.getInt("progress", 0), item.state, item.outputData.getString("error").orEmpty()) }
-                mutable.update { it.copy(downloads = transfers, offline = local()?.offline().orEmpty()) }
+                val succeeded = entries.filter { it.state == WorkInfo.State.SUCCEEDED }.mapTo(hashSetOf()) { it.id }
+                val fresh = completed?.let { succeeded - it }
+                val offline = if (fresh == null) withContext(Dispatchers.IO) { LocalStore(app, account).offline() }
+                    else if (fresh.isNotEmpty()) {
+                        val ids = entries.filter { it.id in fresh }.mapNotNull { item -> item.tags.firstOrNull { it.startsWith("track:") }?.removePrefix("track:") }
+                        val additions = withContext(Dispatchers.IO) { val store = LocalStore(app, account); ids.mapNotNull(store::offlineSong) }
+                        (state.value.offline + additions).distinctBy(Song::id)
+                    } else state.value.offline
+                if (app.credentials.activeId() != account) return@collect
+                completed = succeeded
+                mutable.update { it.copy(downloads = transfers, offline = offline) }
             }
         }
         accountJobs += viewModelScope.launch {

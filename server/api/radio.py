@@ -2,11 +2,11 @@
 """Per-account radio: whole visible catalogue, strict moods, real incremental features."""
 import collections
 import contextlib
-import hashlib
 import heapq
 import json
 import math
 import os
+import random
 from pathlib import Path
 import sqlite3
 import threading
@@ -77,14 +77,17 @@ def artist(song):return song.get('artist_id') or song.get('artist') or song['id'
 
 
 class Engine:
-    def __init__(self,catalog,index,folder):
+    def __init__(self,catalog,index,folder,rng=None):
         self.catalog=catalog;self.index=index;self.path=Path(folder)/'feedback.sqlite'
         if self.path.is_symlink():raise ValueError('Physical radio feedback required')
         self.lock=threading.RLock();self.mix_slot=threading.BoundedSemaphore(1);self.limits={}
+        self.rng=rng or random.SystemRandom()
         with self.db() as db:
             db.executescript('''CREATE TABLE IF NOT EXISTS feedback(uid TEXT NOT NULL,id TEXT NOT NULL,skips INTEGER NOT NULL DEFAULT 0,
                 plays INTEGER NOT NULL DEFAULT 0,disliked INTEGER NOT NULL DEFAULT 0,updated INTEGER NOT NULL,last_kind TEXT,last_event INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(uid,id));
                 CREATE TABLE IF NOT EXISTS served(uid TEXT NOT NULL,id TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(uid,id));''')
+            if 'completions' not in [r[1] for r in db.execute('PRAGMA table_info(feedback)')]:
+                db.execute('ALTER TABLE feedback ADD COLUMN completions INTEGER NOT NULL DEFAULT 0')
         self.path.chmod(0o600)
 
     @contextlib.contextmanager
@@ -129,32 +132,41 @@ class Engine:
         for key,song in songs.items():
             if key in denied or request['mode']=='FAVORITES' and not song.get('starred'):continue
             last=max(epoch(song.get('play_date')),history.get(key,{}).get('playedAt',0))
-            if last>now-30*60_000 or served.get(key,0)>now-5*60_000:continue
+            own=feedback.get(key,{})
+            if last>now-30*60_000 or (own.get('last_kind')=='played' and own.get('last_event',0)>now-30*60_000) or served.get(key,0)>now-5*60_000:continue
             if key not in features:pending.append(key)
             if not eligible(song,features.get(key),request['mood']):continue
             taste=sum(genres[g]/genre_peak for g in song['genres'])/max(1,len(song['genres']))
             score=3*taste+1.5*artists[artist(song)]/artist_peak+(2 if song.get('starred') else 0)
-            score-=min(4,feedback.get(key,{}).get('skips',0))
-            if request['mode']=='DISCOVERY':score-=50 if known[key] else 0
-            else:score-=min(2,math.log2(1+known[key])*.3)
-            variation=int.from_bytes(hashlib.sha256((uid+'|'+str(now//3600_000)+'|'+key).encode()).digest()[:4],'big')/2**32
-            candidates.append((score+variation*.03,key))
+            score+=1.0*math.log2(1+known[key])+.65*math.log2(1+own.get('completions',0))
+            score-=1.1*min(8,own.get('skips',0))
+            # Positive, bounded personal affinity; dates/IDs/insertion order are not ranking signals.
+            weight=math.exp(max(-12,min(12,score)))
+            if taste<=0 and artists[artist(song)]<=0 and (genre_peak>1 or artist_peak>1):weight*=.03
+            tier=int(request['mode']=='DISCOVERY' and (known[key]>0 or bool(song.get('starred'))))
+            if request['mode']=='DISCOVERY' and tier:weight/=1+known[key]
+            elif request['mode']=='BALANCED' and not known[key]:weight*=1.4
+            candidates.append((weight,key,tier))
         def initial_taste(key):
             song=songs[key]
             return (8 if song.get('starred') else 0)+min(4,math.log2(1+known[key]))+sum(genres[g]/genre_peak for g in song['genres'])
-        self.index.prioritize([key for _,key in heapq.nlargest(100,candidates)]+heapq.nlargest(100,pending,key=initial_taste))
-        # Rank the entire library, then sequence a bounded top band plus artist diversity.
-        band=heapq.nlargest(max(120,request['size']*10),candidates)
+        self.index.prioritize([key for _,key,_ in heapq.nlargest(100,candidates)]+heapq.nlargest(100,pending,key=initial_taste))
+        # Exponential races give weighted sampling without replacement across the full catalogue.
+        # Draw only once per candidate; adjacent-artist/transition guards sequence this sampled band.
+        sampled=[(tier,-math.log(max(1e-12,self.rng.random()))/weight,key) for weight,key,tier in candidates]
+        band=heapq.nsmallest(max(120,request['size']*10),sampled)
         by_artist={}
-        for item in candidates:
-            key=artist(songs[item[1]])
-            if key not in by_artist or item>by_artist[key]:by_artist[key]=item
-        band.extend(heapq.nlargest(60,by_artist.values()))
-        result=[];remaining=dict((key,score) for score,key in band)
+        for item in sampled:
+            group=artist(songs[item[2]])
+            if group not in by_artist or item<by_artist[group]:by_artist[group]=item
+        band.extend(heapq.nsmallest(60,by_artist.values()))
+        result=[];remaining={key:(tier,priority) for tier,priority,key in band};artist_counts=collections.Counter()
         while remaining and len(result)<request['size']:
-            alternative=bool(result and any(artist(songs[key])!=artist(songs[result[-1]]) for key in remaining))
+            tier=min(value[0] for value in remaining.values());active=[key for key,value in remaining.items() if value[0]==tier]
+            alternative=bool(result and any(artist(songs[key])!=artist(songs[result[-1]]) for key in active))
             def rank(key):
-                value=remaining[key]
+                value=-math.log(max(1e-12,remaining[key][1]))
+                value-=math.log1p(artist_counts[artist(songs[key])])*1.2
                 if result:
                     if alternative and artist(songs[key])==artist(songs[result[-1]]):return -1e9
                     if key in features and result[-1] in features:
@@ -162,7 +174,7 @@ class Engine:
                         value-=sum(abs(a[i]-b[i]) for i in range(3))*.5
                         if a[3] and b[3]:value-=min(1,abs(a[3]-b[3])/50)
                 return value
-            key=max(remaining,key=rank);result.append(key);del remaining[key]
+            key=max(active,key=rank);result.append(key);artist_counts[artist(songs[key])]+=1;del remaining[key]
         with self.db() as db:
             db.execute('DELETE FROM served WHERE uid=? AND at<?',(uid,now-21600_000))
             db.executemany('INSERT OR REPLACE INTO served VALUES(?,?,?)',[(uid,key,now) for key in result])
@@ -181,6 +193,7 @@ class Engine:
         now=int(time.time()*1000);kind=value['kind'];duration=max(0,float(song['duration']))*1000;position=value['positionMs']
         skips=int(kind=='skipped' and 5000<=position<duration*.8)
         plays=int(kind=='played' and position>=min(30_000,duration*.5) and duration>0)
+        completed=int(kind=='played' and duration>0 and position>=duration*.85)
         with self.db() as db:
             row=db.execute('SELECT * FROM feedback WHERE uid=? AND id=?',(uid,value['id'])).fetchone()
             if row and row['last_kind']==kind and row['last_event']>now-30_000:return {'ok':True}
@@ -188,6 +201,7 @@ class Engine:
             db.execute('INSERT OR IGNORE INTO feedback(uid,id,updated) VALUES(?,?,?)',(uid,value['id'],now))
             db.execute('UPDATE feedback SET skips=min(100,skips+?),plays=min(10000,plays+?),disliked=max(disliked,?),updated=?,last_kind=?,last_event=? WHERE uid=? AND id=?',
                 (skips,plays,int(kind=='disliked'),now,kind,now,uid,value['id']))
+            if completed:db.execute('UPDATE feedback SET completions=min(10000,completions+1) WHERE uid=? AND id=?',(uid,value['id']))
         return {'ok':True}
 
 

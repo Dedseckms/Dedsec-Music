@@ -14,9 +14,15 @@ object DesktopPaths {
 }
 
 /** Windows protects the saved password with the current user's DPAPI key. */
-class DesktopStore(val credentials: Credentials) {
-    val directory = DesktopPaths.account(credentials.accountId)
+class DesktopStore(val credentials: Credentials, val directory: Path = DesktopPaths.account(credentials.accountId)) {
+    init { Files.createDirectories(directory) }
     private val lock = Any()
+    fun offlinePreferences(): OfflinePreferences = read("offline-preferences.json").let { OfflinePreferences(it.optBoolean("afterListen"), it.optBoolean("onFavorite")) }
+    fun offlinePreferences(value: OfflinePreferences) = synchronized(lock) { write("offline-preferences.json", JSONObject().put("afterListen", value.afterListen).put("onFavorite", value.onFavorite)) }
+    private fun queueDirectory(): Path = directory.resolve("download-queue").also { Files.createDirectories(it) }
+    fun pendingDownloads(): List<Song> = Files.list(queueDirectory()).use { paths -> paths.filter { it.fileName.toString().endsWith(".json") }.map { path -> runCatching { Song.parse(JSONObject(Files.readString(path))) }.getOrNull() }.toList().filterNotNull() }
+    fun queueDownloads(songs: List<Song>) { for (song in songs) synchronized(lock) { write("download-queue/${sha256(song.id)}.json", song.json()) } }
+    fun finishDownload(id: String) = synchronized(lock) { Files.deleteIfExists(queueDirectory().resolve("${sha256(id)}.json")); Unit }
     fun audio(song: Song): Path = directory.resolve("offline/${sha256(song.id)}.audio")
     private fun read(name: String) = runCatching { JSONObject(Files.readString(directory.resolve(name))) }.getOrDefault(JSONObject())
     fun history(): List<HistoryEntry> = read("history.json").optJSONArray("items").objects().mapNotNull {
@@ -30,19 +36,16 @@ class DesktopStore(val credentials: Credentials) {
         write("history.json", JSONObject().put("items", JSONArray((listOf(entry) + old.filterNot { it.song.id == song.id }).take(500)
             .map { JSONObject().put("song", it.song.json()).put("at", it.lastPlayed).put("count", it.count) })))
     }
-    fun offline(): List<Song> = read("offline.json").optJSONArray("items").objects().mapNotNull { entry ->
-        runCatching { val song = Song.parse(entry.getJSONObject("song")); song.takeIf { Files.isRegularFile(audio(song)) && Files.size(audio(song)) == entry.getLong("bytes") } }.getOrNull()
+    private fun offlineEntry(entry: JSONObject): Song? = runCatching { val song = Song.parse(entry.getJSONObject("song")); song.takeIf { Files.isRegularFile(audio(song)) && Files.size(audio(song)) == entry.getLong("bytes") } }.getOrNull()
+    fun offline(): List<Song> {
+        val index = directory.resolve("offline-index")
+        val current = if (Files.isDirectory(index)) Files.list(index).use { paths -> paths.filter { it.fileName.toString().endsWith(".json") }.map { path -> runCatching { offlineEntry(JSONObject(Files.readString(path))) }.getOrNull() }.toList().filterNotNull() } else emptyList()
+        return (current + read("offline.json").optJSONArray("items").objects().mapNotNull(::offlineEntry)).distinctBy(Song::id)
     }
-    fun downloaded(song: Song, bytes: Long) = synchronized(lock) {
-        val old = read("offline.json").optJSONArray("items").objects().filterNot { it.getJSONObject("song").getString("id") == song.id }
-        write("offline.json", JSONObject().put("items", JSONArray(old + JSONObject().put("song", song.json()).put("bytes", bytes))))
-    }
-    fun removeOffline(song: Song) = synchronized(lock) {
-        Files.deleteIfExists(audio(song))
-        val old = read("offline.json").optJSONArray("items").objects().filterNot { it.getJSONObject("song").getString("id") == song.id }
-        write("offline.json", JSONObject().put("items", JSONArray(old)))
-    }
+    fun downloaded(song: Song, bytes: Long) = synchronized(lock) { write("offline-index/${sha256(song.id)}.json", JSONObject().put("song", song.json()).put("bytes", bytes)) }
+    fun removeOffline(song: Song) = synchronized(lock) { Files.deleteIfExists(audio(song)); Files.deleteIfExists(directory.resolve("offline-index/${sha256(song.id)}.json")); Unit }
     private fun write(name: String, value: JSONObject) {
+        Files.createDirectories(directory.resolve(name).parent)
         val temp = Files.createTempFile(directory, "write-", ".tmp")
         try { Files.writeString(temp, value.toString()); Files.move(temp, directory.resolve(name), ATOMIC_MOVE, REPLACE_EXISTING) }
         finally { Files.deleteIfExists(temp) }

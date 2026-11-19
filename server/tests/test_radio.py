@@ -5,6 +5,7 @@ import copy
 import json
 import math
 import os
+import random
 from pathlib import Path
 import sqlite3
 import sys
@@ -45,7 +46,7 @@ class FakeIndex:
 
 
 class RadioTests(unittest.TestCase):
-    def engine(self,root,rows,values):return radio.Engine(FakeCatalog(rows),FakeIndex(values),root)
+    def engine(self,root,rows,values):return radio.Engine(FakeCatalog(rows),FakeIndex(values),root,rng=random.Random(4))
     def request(self,**kwargs):return radio.request_mix(dict(mood='ANY',mode='BALANCED',size=40,history=[],dislikedIds=[],excludeIds=[],**kwargs))
 
     def test_moods_are_hard_filters_never_fill_with_opposite_or_unknown_audio(self):
@@ -79,8 +80,51 @@ class RadioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             engine=self.engine(root,{'u':rows},{})
             result=engine.mix('u',radio.request_mix({'size':3}))
-            self.assertEqual(result['songs'][0]['id'],'last');self.assertEqual(result['songs'][1]['id'],'similar')
+            ids=[item['id'] for item in result['songs']]
+            self.assertIn('last',ids);self.assertIn('similar',ids)
+            self.assertNotEqual(result['songs'][0]['artistId'],result['songs'][1]['artistId'])
             self.assertEqual(result['analysis']['total'],402)
+
+    def test_favorites_weight_repeated_plays_without_like_date_or_insertion_order(self):
+        rows={str(i):song(str(i),artist=str(i),starred=True) for i in range(12)}
+        rows['0']['play_count']=40
+        for i,row in enumerate(rows.values()):row['starred_at']='2026-01-'+str(i+1).zfill(2)
+        with tempfile.TemporaryDirectory() as root:
+            engine=self.engine(root,{'u':rows},{})
+            first=[]
+            for _ in range(200):
+                with engine.db() as db:db.execute('DELETE FROM served')
+                result=engine._mix('u',radio.request_mix({'mode':'FAVORITES','size':1}))
+                first.append(result['songs'][0]['id'])
+            self.assertGreater(first.count('0'),max(first.count(str(i)) for i in range(1,12))*3)
+            self.assertGreater(len(set(first)),1)
+            # Date-only changes are not a ranking input, even with a controlled random stream.
+            engine.rng=random.Random(8)
+            with engine.db() as db:db.execute('DELETE FROM served')
+            one=engine._mix('u',radio.request_mix({'mode':'FAVORITES','size':12}))
+            for row in rows.values():row['starred_at']='1990-01-01'
+            engine.rng=random.Random(8)
+            with engine.db() as db:db.execute('DELETE FROM served')
+            two=engine._mix('u',radio.request_mix({'mode':'FAVORITES','size':12}))
+            self.assertEqual([s['id'] for s in one['songs']],[s['id'] for s in two['songs']])
+            self.assertNotEqual([s['id'] for s in one['songs']],list(rows))
+
+    def test_discovery_keeps_new_tier_before_known_and_mood_is_still_hard(self):
+        rows={'hot':song('hot',starred=True,played=10000),'cold':song('cold'),'opposite':song('opposite',genres=['ambient'])}
+        with tempfile.TemporaryDirectory() as root:
+            engine=self.engine(root,{'u':rows},{'hot':acoustic(),'cold':acoustic(),'opposite':acoustic('low')})
+            ids=[r['id'] for r in engine._mix('u',radio.request_mix({'mode':'DISCOVERY','mood':'ENERGY'}))['songs']]
+            self.assertEqual(ids,['cold','hot'])
+
+    def test_completed_feedback_requires_real_duration_and_recent_play_suppresses_repeat(self):
+        with tempfile.TemporaryDirectory() as root:
+            engine=self.engine(root,{'u':{'x':song('x')}},{})
+            engine.event('u',{'id':'x','kind':'played','positionMs':30000,'durationMs':1})
+            with engine.db() as db:self.assertEqual(db.execute('SELECT completions FROM feedback').fetchone()[0],0)
+            self.assertFalse(engine._mix('u',radio.request_mix({}))['songs'])
+            with engine.db() as db:db.execute('UPDATE feedback SET last_event=0')
+            engine.event('u',{'id':'x','kind':'played','positionMs':170000,'durationMs':1})
+            with engine.db() as db:self.assertEqual(db.execute('SELECT completions FROM feedback').fetchone()[0],1)
 
     def test_feedback_dislike_is_private_visible_only_and_retry_does_not_double_count(self):
         rows={'u':{'a':song('a')},'v':{'b':song('b')}}
@@ -145,6 +189,20 @@ class CatalogTests(unittest.TestCase):
             catalog=self.fixture(Path(temp));s=catalog.songs('u')['a'];self.assertIsNotNone(catalog.physical(s))
             for value in ['../outside.mp3','/etc/passwd','a\\file.mp3']:
                 self.assertIsNone(catalog.physical(dict(s,path=value)))
+
+    def test_batch_lookup_is_fresh_and_matches_single_path_guards(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);catalog=self.fixture(root);rows=catalog.songs('u')
+            self.assertEqual(catalog.physicals(rows)['a'],catalog.physical(rows['a']))
+            (root/'music/a.mp3').write_bytes(b'new bytes')
+            self.assertEqual(catalog.physicals(rows)['a'][1],9)
+            for value in ['../outside.mp3','/etc/passwd','a\\x.mp3']:
+                self.assertFalse(catalog.physicals({'bad':dict(rows['a'],path=value)}))
+            if os.name=='posix':
+                (root/'music/link').symlink_to(root/'music',target_is_directory=True)
+                self.assertFalse(catalog.physicals({'bad':dict(rows['a'],path='link/a.mp3')}))
+                (root/'music/a.mp3').unlink();(root/'music/a.mp3').symlink_to(root/'music/b.mp3')
+                self.assertFalse(catalog.physicals(rows))
 
 
 class FeatureTests(unittest.TestCase):
