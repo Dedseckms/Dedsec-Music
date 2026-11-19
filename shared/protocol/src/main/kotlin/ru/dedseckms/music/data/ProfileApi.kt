@@ -24,7 +24,8 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
     private var token: String? get() = tokens.get(); set(value) { tokens.set(value) }
     private val pending = java.util.concurrent.ConcurrentHashMap.newKeySet<okhttp3.Call>()
     @Volatile private var cancelled = false
-    suspend fun <T> await(block: ProfileApi.() -> T): T = try { withTimeout(15_000) { coroutineScope {
+    suspend fun <T> await(block: ProfileApi.() -> T): T = await(15_000, block)
+    suspend fun <T> await(timeoutMs: Long, block: ProfileApi.() -> T): T = try { withTimeout(timeoutMs) { coroutineScope {
         val scoped = ProfileApi(credentials, client, allowLocalHttpForTests).also { it.tokens = tokens }
         val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
             try { awaitCancellation() } finally { scoped.cancelled = true; scoped.pending.forEach { it.cancel() } }
@@ -35,10 +36,10 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         } }
         finally { withContext(NonCancellable) { watcher.cancelAndJoin() } }
     } } } catch (_: TimeoutCancellationException) { throw IOException("Профиль отвечает слишком долго. Попробуй ещё раз") }
-    private fun execute(request: Request): Response {
+    private fun execute(request: Request, upload: Boolean = false): Response {
         if (cancelled) throw CancellationException("Profile request cancelled")
-        val call = client.newCall(request)
-        call.timeout().timeout(12, TimeUnit.SECONDS)
+        val call = (if (upload) client.newBuilder().retryOnConnectionFailure(false).build() else client).newCall(request)
+        call.timeout().timeout(if (upload) 600 else 12, TimeUnit.SECONDS)
         pending += call
         if (cancelled) call.cancel()
         try {
@@ -88,6 +89,40 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         return AccountProfile(data.getString("userId"), data.optString("avatarVersion"), data.optInt("librarySongCount", -1), data.optBoolean("isAdmin", false))
     }
     fun me(): AccountProfile = profile(authorized { request("me", it).build() })
+    fun capabilities(): Boolean = authorized { request("capabilities", it).build() }.use {
+        if (!it.isSuccessful) return@use false
+        val value = JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8))
+        value.optInt("schema") == 1 && value.optJSONObject("uploads")?.optString("mode") == "navidrome" &&
+            value.optJSONObject("uploads")?.optString("path") == "/dedsec/profile/v1/uploads"
+    }
+    fun lyrics(id: String): JSONObject {
+        require(id.isNotBlank() && id.length <= 128 && id.none { it == '/' || it == '\\' || it.code < 32 } && id !in setOf(".", ".."))
+        return authorized { jwt -> Request.Builder().url(endpoint("dedsec/profile/v1/lyrics").newBuilder().addPathSegment(id).build()).header("Authorization", "Bearer $jwt").build() }.use {
+            if (!it.isSuccessful) throw IOException("Текст пока недоступен")
+            JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 524288), Charsets.UTF_8))
+        }
+    }
+    fun upload(filename: String, length: Long, open: () -> InputStream, progress: (Long, Long) -> Unit) {
+        val safe = UploadApi.safeFilename(filename); UploadPolicy.checkBytes(length)
+        // Upload bodies cannot be retried after publication: a failed response is reported for explicit recovery.
+        login()
+        val body = object : okhttp3.RequestBody() {
+            override fun isOneShot() = true
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength() = length.takeIf { it >= 0 } ?: -1
+            override fun writeTo(sink: okio.BufferedSink) {
+                open().use { input -> val bytes = ByteArray(65536); var sent = 0L
+                    while (true) { if (cancelled) throw CancellationException(); val count = input.read(bytes); if (count < 0) break
+                        UploadPolicy.checkBytes(sent + count); sink.write(bytes, 0, count); sent += count; progress(sent, length)
+                    }
+                }
+            }
+        }
+        val url = endpoint("dedsec/profile/v1/uploads").newBuilder().addQueryParameter("path", "/$safe").build()
+        execute(Request.Builder().url(url).header("Authorization", "Bearer $token").post(body).build(), upload = true).use {
+            if (!it.isSuccessful) throw UploadRejected(when (it.code) { 401, 403 -> "Нет доступа к загрузке. Войди в музыкальный аккаунт заново"; 413 -> "Файл больше 100 МБ"; 415, 422 -> "Нужен аудиофайл до 20 минут"; 404 -> "Обнови серверное дополнение для единого входа"; else -> "Не удалось загрузить файл. Проверь результат перед повтором" })
+        }
+    }
     fun upload(bytes: ByteArray): AccountProfile {
         require(bytes.size <= 5_000_000)
         return profile(authorized { request("avatar", it).put(bytes.toRequestBody("image/jpeg".toMediaType())).build() })

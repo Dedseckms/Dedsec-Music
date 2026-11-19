@@ -47,6 +47,7 @@ class UploadApi(private val credentials: Credentials, private val client: OkHttp
         val safe = safeFilename(filename)
         UploadPolicy.checkBytes(length)
         val body = object : RequestBody() {
+            override fun isOneShot() = true
             override fun contentType() = "application/octet-stream".toMediaType()
             override fun contentLength() = length.takeIf { it >= 0 } ?: -1
             override fun writeTo(sink: BufferedSink) {

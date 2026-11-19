@@ -286,16 +286,18 @@ private val LocalSample = staticCompositionLocalOf { false }
     }
 }
 @Composable private fun BottomPlayer(c: DesktopController, s: DesktopState, audio: AudioState, add: (Song) -> Unit, queue: () -> Unit) {
+    var lyrics by remember { mutableStateOf(false) }
+    if (lyrics) s.now?.let { song -> key(s.username, song.id) { LyricsDialog(song, audio.position, c.lyricsApi(), c.lyricsCache(song), c.audio::seek) { lyrics = false } } }
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Row(Modifier.fillMaxWidth().height(112.dp).padding(horizontal = 28.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(28.dp)) {
             Row(Modifier.width(250.dp), verticalAlignment = Alignment.CenterVertically) { Cover(s.now?.coverArt.orEmpty(), s.now?.album ?: "DedSec", Modifier.size(58.dp), 16); Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(s.now?.title ?: "Поймай свой ритм", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Text(s.now?.artist ?: "Выбери трек для воспроизведения", maxLines = 1, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IconButton(c::shuffle, enabled = s.now != null) { Icon(Icons.Rounded.Shuffle, "Перемешать", Modifier.size(19.dp), tint = if (s.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (!s.wave) IconButton(c::shuffle, enabled = s.now != null) { Icon(Icons.Rounded.Shuffle, "Перемешать", Modifier.size(19.dp), tint = if (s.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton({ c.skip(false) }, enabled = s.now != null) { Icon(Icons.Rounded.SkipPrevious, "Назад", Modifier.size(28.dp)) }
                     FilledIconButton(c::toggle, enabled = s.now != null, modifier = Modifier.size(46.dp), shape = RoundedCornerShape(18.dp)) { if (audio.buffering) CircularProgressIndicator(Modifier.size(23.dp), strokeWidth = 2.dp) else Icon(if (audio.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", Modifier.size(30.dp)) }
                     IconButton({ c.skip(true) }, enabled = s.now != null) { Icon(Icons.Rounded.SkipNext, "Далее", Modifier.size(28.dp)) }
-                    IconButton(c::repeat, enabled = s.now != null) { Icon(Icons.Rounded.Repeat, "Повтор", Modifier.size(19.dp), tint = if (s.repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                    IconButton(c::repeat, enabled = s.now != null) { Icon(if (s.wave) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, if (s.wave) "Повторять один трек" else "Повтор очереди", Modifier.size(19.dp), tint = if (if (s.wave) s.repeatOne else s.repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val duration = audio.duration.takeIf { it > 0 } ?: (s.now?.duration ?: 0) * 1000L
@@ -306,9 +308,9 @@ private val LocalSample = staticCompositionLocalOf { false }
                     Text(formatTime(duration), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Column(Modifier.width(220.dp), horizontalAlignment = Alignment.End) {
+            Column(Modifier.width(252.dp), horizontalAlignment = Alignment.End) {
                 Text(s.source, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) { IconButton({ s.now?.let(add) }, enabled = s.now != null) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", Modifier.size(20.dp)) }; IconButton(queue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.size(20.dp)) }; Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, Modifier.size(17.dp)); var volume by remember { mutableFloatStateOf(.8f) }; Slider(volume, { volume = it; c.audio.volume(it) }, Modifier.width(80.dp)) }
+                Row(verticalAlignment = Alignment.CenterVertically) { IconButton({ s.now?.let(add) }, enabled = s.now != null) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", Modifier.size(20.dp)) }; IconButton({ lyrics = true }, enabled = s.now != null) { Icon(Icons.Rounded.Lyrics, "Текст песни", Modifier.size(20.dp)) }; IconButton(queue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.size(20.dp)) }; Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, Modifier.size(17.dp)); var volume by remember { mutableFloatStateOf(.8f) }; Slider(volume, { volume = it; c.audio.volume(it) }, Modifier.width(80.dp)) }
             }
         }
     }
@@ -386,16 +388,16 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
     }
 }
 @Composable private fun Upload(c: DesktopController, s: DesktopState) {
-    LaunchedEffect(s.username) { c.refreshImport() }
+    LaunchedEffect(s.username) { c.refreshImport(); c.refreshUploadConnection() }
     var server by remember { mutableStateOf(DEFAULT_UPLOAD_SERVER) }; var username by remember { mutableStateOf(s.username) }; var password by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         YandexImportCard(s.importStatus, !s.demo, c::startImport, c::cancelImport, c::refreshImport)
         Section("Добавь свой звук", "ЗАГРУЗКА МУЗЫКИ")
         Text("Аудиофайлы попадут в общую библиотеку сервера. До 100 МБ и 20 минут на файл.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(server, { server = it }, label = { Text("Сервер загрузки") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { OutlinedTextField(username, { username = it }, label = { Text("Логин загрузки") }, singleLine = true, modifier = Modifier.weight(1f)); OutlinedTextField(password, { password = it }, label = { Text("Пароль загрузки") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f)) }
-        Button({ val chooser = JFileChooser().apply { isMultiSelectionEnabled = true }; if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) { c.upload(server, username, password, chooser.selectedFiles.map { it.toPath() }); password = "" } }, enabled = password.isNotEmpty() && s.transfer == null, modifier = Modifier.height(52.dp)) { Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(10.dp)); Text("Выбрать аудиофайлы") }
+        if (!s.unifiedUpload) OutlinedTextField(server, { server = it }, label = { Text("Сервер загрузки") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (!s.unifiedUpload) Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) { OutlinedTextField(username, { username = it }, label = { Text("Логин загрузки") }, singleLine = true, modifier = Modifier.weight(1f)); OutlinedTextField(password, { password = it }, label = { Text("Пароль загрузки") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f)) }
+        Button({ val chooser = JFileChooser().apply { isMultiSelectionEnabled = true }; if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) { c.upload(server, username, password, chooser.selectedFiles.map { it.toPath() }); password = "" } }, enabled = (s.unifiedUpload || password.isNotEmpty()) && s.transfer == null, modifier = Modifier.height(52.dp)) { Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(10.dp)); Text("Выбрать аудиофайлы") }
         s.transfer?.let { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(it, fontSize = 12.sp) }
-        Text("Пароль загрузки вводится отдельно. Музыкальный пароль сюда автоматически не передаётся.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(if (s.unifiedUpload) "Вход выполнен музыкальным аккаунтом. Файлы привязываются к твоему профилю." else "Для отдельного файлового сервера укажи его аккаунт загрузки.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -12,7 +12,10 @@ import kotlinx.coroutines.withContext
 class UploadWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val account = inputData.getString("account") ?: return@withContext Result.failure()
-        val credentials = CredentialStore(applicationContext).upload(account) ?: return@withContext Result.failure()
+        val accounts = CredentialStore(applicationContext)
+        if (accounts.activeId() != account) return@withContext Result.failure()
+        val unified = inputData.getBoolean("unified", false)
+        val credentials = (if (unified) accounts.load(account) else accounts.upload(account)) ?: return@withContext Result.failure()
         val uri = Uri.parse(inputData.getString("uri") ?: return@withContext Result.failure())
         val name = inputData.getString("name") ?: return@withContext Result.failure()
         val metadata = android.media.MediaMetadataRetriever()
@@ -26,19 +29,20 @@ class UploadWorker(context: Context, parameters: WorkerParameters) : CoroutineWo
         } catch (_: Exception) { Triple("", "", 0L) } finally { metadata.release() }
         try {
             UploadPolicy.validate(name, inputData.getLong("size", -1), tags.third, hasVideo)
-            val api = UploadApi(credentials)
-            api.login()
             var last = -1
-            api.upload(name, inputData.getLong("size", -1), {
+            val open = {
                 applicationContext.contentResolver.openInputStream(uri) ?: error("Файл недоступен")
-            }) { sent, size ->
-                if (isStopped) throw CancellationException()
+            }
+            val progress: (Long, Long) -> Unit = { sent, size ->
+                if (isStopped || accounts.activeId() != account) throw CancellationException()
                 val progress = if (size > 0) (sent * 100 / size).toInt() else 0
                 if (progress != last) {
                     last = progress
                     setProgressAsync(workDataOf("progress" to progress, "name" to name))
                 }
             }
+            if (unified) ProfileApi(credentials).await(600_000) { upload(name, inputData.getLong("size", -1), open, progress) }
+            else UploadApi(credentials).apply { login() }.upload(name, inputData.getLong("size", -1), open, progress)
             // A normal user may not have scan permissions; the scheduled scan still discovers uploads.
             val requested = CredentialStore(applicationContext).load(account)?.let { runCatching { NavApi(it).requestScan() }.isSuccess } ?: false
             Result.success(workDataOf("name" to name, "title" to tags.first.take(250), "artist" to tags.second.take(250),

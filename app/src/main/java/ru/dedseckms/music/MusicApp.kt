@@ -15,7 +15,7 @@ class MusicApp : Application() {
     private var profileSession: Pair<ru.dedseckms.music.data.Credentials, ru.dedseckms.music.data.ProfileApi>? = null
     @Synchronized fun profileApi(): ru.dedseckms.music.data.ProfileApi? {
         val account = credentials.active() ?: return null
-        return profileSession?.takeIf { it.first === account }?.second
+        return profileSession?.takeIf { it.first.accountId == account.accountId && it.first.password == account.password }?.second
             ?: ru.dedseckms.music.data.ProfileApi(account).also { profileSession = account to it }
     }
     @Synchronized fun clearProfileSession() { profileSession = null }

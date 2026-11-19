@@ -246,6 +246,9 @@ def dispatch(handler, chunks):
     parsed = urllib.parse.urlsplit(handler.path)
     if not parsed.path.startswith(PREFIX + "/"):
         return None
+    import media_api
+    if media_api.owns(parsed.path):
+        return media_api.dispatch(handler,chunks)
     if parsed.path.startswith(PREFIX + "/admin/"):
         import admin_api
         return admin_api.dispatch(handler, chunks)

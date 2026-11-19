@@ -8,6 +8,7 @@ COPY audio.py profile_api.py server.py yandex_import.py yandex_source.py import_
 COPY radio.py radio_catalog.py radio_features.py ./
 COPY admin_api.py ./
 COPY system_admin.py system_stats.py storage_jobs.py ./
+COPY media_api.py lyrics_api.py ./
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 1000:1000
 EXPOSE 8080

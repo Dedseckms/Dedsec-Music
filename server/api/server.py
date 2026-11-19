@@ -21,6 +21,8 @@ import profile_api as profile
 import yandex_import
 import radio
 import admin_api
+import media_api
+import lyrics_api
 
 STORAGE = Path(os.environ.get('STORAGE_ROOT', '/storage')).resolve()
 LIBRARY = STORAGE / 'library'
@@ -85,30 +87,7 @@ def login(query, headers):
 
 
 def upload(identity, query, chunks):
-    if admin_api.SERVICE: admin_api.SERVICE.identity(identity)
-    name = audio.filename(query)
-    if not audio.UPLOAD.acquire(blocking=False):
-        raise audio.Rejected(429)
-    try:
-        # Stable user UUID plus a fresh upload UUID; original basename stays searchable.
-        user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity['id']))
-        folder = LIBRARY / 'uploads' / user_id
-        for directory in (LIBRARY / 'uploads', folder):
-            directory.mkdir(mode=0o700, exist_ok=True)
-            fd = audio.safe_directory(directory); os.close(fd)
-        def validate(path):
-            duration = audio.validate(path)
-            if admin_api.SERVICE: admin_api.SERVICE.identity(identity)
-            current, _ = profile.native(identity['token'], '/api/user/' + identity['id'])
-            if current.get('id') != identity['id']:
-                raise profile.ProfileError(401)
-            return duration
-        publication = uuid.uuid4().hex
-        size, seconds = audio.receive(chunks, STAGING, folder, name, validator=validate, identifier=publication)
-        if admin_api.SERVICE: admin_api.SERVICE.record(identity, folder / publication / name, name, size)
-        return {'status': 'accepted', 'name': name, 'bytes': size, 'duration': seconds}
-    finally:
-        audio.UPLOAD.release()
+    return media_api.native_upload(identity,query,chunks,LIBRARY,STAGING)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -211,8 +190,12 @@ if __name__ == '__main__':
     import system_admin
     SYSTEM=system_admin.configure(profile.BASE,LIBRARY,volumes=json.loads(os.environ.get('STORAGE_VOLUMES','[]')),slot=audio.UPLOAD,
                         nav_database=os.environ.get('NAV_DB_PATH','/nav-data/navidrome.db'),library_ids=json.loads(os.environ.get('RADIO_LIBRARY_MAP','{"1":"/storage/library"}')))
+    if RADIO is None:raise RuntimeError('Read-only music catalogue required for lyrics')
+    LYRICS=lyrics_api.Manager(profile.BASE,RADIO.catalog,guard=media_api.guard)
+    media_api.configure(upload,LYRICS)
     try:Server(('0.0.0.0', 8080), Handler).serve_forever(poll_interval=1)
     finally:
+        LYRICS.close()
         SYSTEM.close()
         if RADIO is not None:RADIO.index.close()
         IMPORTER.close()

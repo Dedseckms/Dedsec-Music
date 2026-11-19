@@ -11,7 +11,7 @@
     <a href="LICENSE"><img alt="GPL v3 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-A8C7FA?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Android 8+" src="https://img.shields.io/badge/Android-8.0%2B-C4E7D4?style=flat-square&amp;labelColor=182231" />
     <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-A8C7FA?style=flat-square&amp;labelColor=182231" />
-    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.2"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
+    <a href="https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.3"><img alt="iPhone Preview" src="https://img.shields.io/badge/iPhone-iOS_17%2B_Preview-D0BCFF?style=flat-square&amp;labelColor=182231" /></a>
     <img alt="Material 3" src="https://img.shields.io/badge/design-Material_3-D0BCFF?style=flat-square&amp;labelColor=182231" />
   </p>
 
@@ -22,7 +22,7 @@
 
 DedSec Music — открытый музыкальный клиент для Android и Windows. Подключи Navidrome, собери любимую коллекцию и слушай её дома, в дороге и без интернета. На одном сервере можно жить с друзьями: аудиотека общая, а плейлисты и избранное у каждого свои.
 
-[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.2). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
+[**Android и Windows →**](https://github.com/Dedseckms/Dedsec-Music/releases/latest) · [**iPhone Preview →**](https://github.com/Dedseckms/Dedsec-Music/releases/tag/ios-v0.1.3). iPhone устанавливается через [AltStore с Windows](docs/IPHONE.md); macOS — в [плане развития](docs/MULTIPLATFORM.md).
 
 ## Интерфейс
 
@@ -46,6 +46,7 @@ DedSec Music — открытый музыкальный клиент для And
 | | Возможности |
 | :-- | :-- |
 | **Слушать** | Потоковое воспроизведение, очередь, перемешивание, повтор, массовое скачивание и автоматический офлайн. |
+| **Читать** | Интернет-тексты, построчная синхронизация, перемотка по строке и кеш для офлайн-просмотра. |
 | **Находить** | Поиск по части названия, страницы исполнителей, альбомы и жанры из тегов библиотеки. |
 | **Моя волна** | Персональный микс из музыки сервера: настроение, любимое, открытия и баланс. |
 | **Собирать** | Личные плейлисты, избранное и аватар профиля. |
@@ -62,6 +63,8 @@ DedSec Music — открытый музыкальный клиент для And
 1. Есть Navidrome? [Скачай клиент](https://github.com/Dedseckms/Dedsec-Music/releases/latest) или [собери из исходников](docs/BUILDING.md), введи HTTPS-адрес сервера, логин и пароль.
 2. Нужен весь комплект? Разверни [сервер с пошаговыми скриптами](server/README.md).
 3. Хочешь забрать свою коллекцию? Во вкладке **«Добавить»** открой карточку **«Из Яндекс Музыки»**. [Где получить токен →](docs/YANDEX_IMPORT.md#получить-токен)
+
+На совместимом сервере музыкальный аккаунт также открывает загрузку файлов — отдельный вход не нужен. [Тексты песен и единый вход →](docs/LYRICS_AND_LOGIN.md)
 
 Администратор создаёт пользователей. Каждый входит в собственный аккаунт; доступные ему треки определяются библиотеками сервера. [Подробнее о возможностях и границах](docs/FEATURES.md).
 
