@@ -35,7 +35,7 @@ import java.io.File
     val list = rememberLazyListState()
     val dragged by list.interactionSource.collectIsDraggedAsState()
     var follow by remember(song.id) { mutableStateOf(true) }
-    var offset by remember(song.id) { mutableLongStateOf(0L) }
+    var offset by remember(song.id, lyrics?.revision, lyrics?.timingOffsetMs) { mutableLongStateOf(lyrics?.timingOffsetMs ?: 0L) }
     val active = lyrics?.activeLine(position + offset) ?: -1
     LaunchedEffect(dragged) { if (dragged) follow = false }
     LaunchedEffect(active, follow) { if (follow && active >= 0) list.animateScrollToItem((active - 1).coerceAtLeast(0)) }
@@ -43,15 +43,20 @@ import java.io.File
         Column(Modifier.fillMaxSize().padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text("Текст песни", style = MaterialTheme.typography.titleLarge); Text(if (lyrics?.synced == true) "В такт музыке" else "Слова твоего трека", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                IconButton(session::refresh) { Icon(Icons.Rounded.Refresh, "Обновить текст") }
+                IconButton(session::refresh, enabled = !state.savingTiming) { Icon(Icons.Rounded.Refresh, "Обновить текст") }
                 IconButton(dismiss) { Icon(Icons.Rounded.Close, "Закрыть текст") }
             }
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
             state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 8.dp)) }
-            if (lyrics?.synced == true) Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ offset = (offset - 250).coerceAtLeast(-10000) }) { Text("−0,25 с") }
+            if (lyrics?.synced == true && lyrics.canEditTiming) Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ offset = (offset - 250).coerceAtLeast(-10000) }, enabled = !state.savingTiming) { Text("−0,25 с") }
                 Text("${offset} мс", style = MaterialTheme.typography.labelSmall)
-                TextButton({ offset = (offset + 250).coerceAtMost(10000) }) { Text("+0,25 с") }
+                TextButton({ offset = (offset + 250).coerceAtMost(10000) }, enabled = !state.savingTiming) { Text("+0,25 с") }
+            }
+            if (lyrics?.synced == true) Row(verticalAlignment = Alignment.CenterVertically) {
+                if (lyrics.canEditTiming) TextButton({ session.saveTiming(offset) }, enabled = !state.loading && !state.savingTiming && offset != lyrics.timingOffsetMs) {
+                    Text(if (state.savingTiming) "Сохраняем…" else if (offset == lyrics.timingOffsetMs) "Сохранено на сервере" else "Сохранить для всех")
+                } else Text("Синхронизация владельца · ${offset} мс", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.weight(1f))
                 if (!follow) TextButton({ follow = true }) { Text("К строке") }
             }

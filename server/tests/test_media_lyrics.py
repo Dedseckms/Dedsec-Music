@@ -39,6 +39,63 @@ class LyricsTests(unittest.TestCase):
     def finish(self,manager):
         item=manager.work.get_nowait();manager.process(item);manager.pending.discard(item[2]);manager.work.task_done()
 
+    def synced_fixture(self,root):
+        native=Mock(return_value=lyrics.response('ready',[{'startMs':1000,'text':'Original source line'}],True,'Navidrome'))
+        m,lib,db,user=self.fixture(root,native);m.protected_owner='owner'
+        m.get(user,'song');self.finish(m)
+        return m,lib,db,user,native
+
+    def test_owner_timing_persists_across_restart_refresh_and_shared_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);m,lib,db,user,native=self.synced_fixture(root)
+            original=m.get(user,'song');self.assertTrue(original['canEditTiming'])
+            saved=m.set_timing(user,'song',750,original['revision'])
+            self.assertEqual(saved['timingOffsetMs'],750);self.assertEqual(saved['lines'],original['lines'])
+            with contextlib.closing(sqlite3.connect(db)) as d:
+                with d:d.execute("INSERT INTO user_library VALUES('friend',1)")
+            friend={**user,'id':'friend','isAdmin':True}
+            value=m.get(friend,'song');self.assertFalse(value['canEditTiming']);self.assertEqual(value['timingOffsetMs'],750)
+            m.close()
+            m=lyrics.Manager(root/'state',Catalog(db,{'1':lib}),start=False,native=native,protected_owner='owner')
+            self.assertEqual(m.get(user,'song')['timingOffsetMs'],750)
+            with m.db() as d:d.execute('UPDATE cache SET expires=0')
+            self.assertEqual(m.get(user,'song')['status'],'pending');self.finish(m)
+            self.assertEqual(m.get(user,'song')['timingOffsetMs'],750)
+            native.return_value=lyrics.response('ready',[{'startMs':2000,'text':'New timing'}],True,'Navidrome')
+            with m.db() as d:d.execute('UPDATE cache SET expires=0')
+            m.get(user,'song');self.finish(m)
+            self.assertEqual(m.get(user,'song')['timingOffsetMs'],0)
+            with self.assertRaises(profile.ProfileError) as error:m.set_timing(user,'song',500,original['revision'])
+            self.assertEqual(error.exception.status,409)
+
+    def test_timing_failclosed_owner_visibility_strict_bounds_and_stale_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m,lib,db,user,native=self.synced_fixture(Path(tmp));revision=m.get(user,'song')['revision']
+            for who in ({**user,'id':'stranger'},{**user,'id':'admin','isAdmin':True}):
+                with self.assertRaises(profile.ProfileError) as error:m.set_timing(who,'song',0,revision)
+                self.assertEqual(error.exception.status,403)
+            m.protected_owner=None
+            self.assertFalse(m.get(user,'song')['canEditTiming'])
+            with self.assertRaises(profile.ProfileError) as error:m.set_timing(user,'song',0,revision)
+            self.assertEqual(error.exception.status,403);m.protected_owner='owner'
+            for invalid in (True,1.0,'250',10001,-10001,None):
+                with self.assertRaises(profile.ProfileError) as error:m.set_timing(user,'song',invalid,revision)
+                self.assertEqual(error.exception.status,400)
+            for offset in (-10000,10000,0):self.assertEqual(m.set_timing(user,'song',offset,revision)['timingOffsetMs'],offset)
+            m.guard=Mock(side_effect=profile.ProfileError(401))
+            with self.assertRaises(profile.ProfileError) as error:m.set_timing(user,'song',0,revision)
+            self.assertEqual(error.exception.status,401);m.guard=lambda who:None
+            (lib/'song.mp3').write_bytes(b'replacement recording')
+            with self.assertRaises(profile.ProfileError) as error:m.set_timing(user,'song',250,revision)
+            self.assertEqual(error.exception.status,409)
+            m.get(user,'song');self.finish(m)
+            self.assertEqual(m.get(user,'song')['timingOffsetMs'],0)
+            with contextlib.closing(sqlite3.connect(db)) as d:
+                with d:d.execute('DELETE FROM user_library')
+            for action in (lambda:m.get(user,'song'),lambda:m.set_timing(user,'song',0,revision)):
+                with self.assertRaises(profile.ProfileError) as error:action()
+                self.assertEqual(error.exception.status,404)
+
     def test_pending_get_does_not_perform_network_and_cache_checks_visibility_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             native=Mock(return_value=lyrics.response('ready',[{'startMs':None,'text':'Real source words'}],False,'Navidrome'))
@@ -158,6 +215,25 @@ class MediaTests(unittest.TestCase):
         with patch.object(profile,'send',side_effect=lambda handler,status,value:values.append((status,value))):
             code=profile.dispatch(h,audio.body_chunks)
         return code,values[0][1]
+
+    def test_timing_route_auth_body_limit_and_fixed_song_route(self):
+        manager=Mock();manager.set_timing.return_value={'timingOffsetMs':250,'canEditTiming':True}
+        identity={'id':'owner','username':'Fixture'}
+        body=json.dumps({'offsetMs':250,'revision':'a'*64}).encode()
+        headers=Message();headers['Content-Length']=str(len(body))
+        with patch.object(profile,'authenticate',side_effect=profile.ProfileError(401)):
+            self.assertEqual(self.request('/lyrics/song/timing','POST',headers,body)[0],401)
+        with patch.object(profile,'authenticate',return_value=identity),patch.object(media,'UPLOAD',object()),patch.object(media,'LYRICS',manager),patch.object(admin_api,'SERVICE',None):
+            self.assertEqual(self.request('/lyrics/song/timing','POST',headers,body)[0],200)
+            manager.set_timing.assert_called_once_with(identity,'song',250,'a'*64)
+            manager.set_timing.reset_mock()
+            for invalid in (b'{}',b'[]',b'null',b'{invalid'):
+                h=Message();h['Content-Length']=str(len(invalid))
+                self.assertEqual(self.request('/lyrics/song/timing','POST',h,invalid)[0],400)
+            h=Message();h['Content-Length']='1025'
+            self.assertEqual(self.request('/lyrics/song/timing','POST',h,b'x'*1025)[0],413)
+            self.assertNotEqual(self.request('/lyrics/song/timing?override=true','POST',headers,body)[0],200)
+            manager.set_timing.assert_not_called()
 
     def test_capability_auth_same_jwt_upload_and_legacy_callback_reuse(self):
         upload=Mock(return_value={'status':'accepted','name':'a.mp3','bytes':3,'duration':1});identity={'id':'u','token':'same-jwt','username':'Fixture'}

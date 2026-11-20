@@ -67,6 +67,15 @@ def dispatch(handler,chunks):
             audio.filename(query)
             if handler.headers.get('Content-Length') and int(handler.headers['Content-Length'])>audio.MAX_BYTES:raise audio.Rejected(413)
             result=UPLOAD(identity,query,chunks(handler.rfile,handler.headers))
+        elif handler.command=='POST' and not parsed.query and re.fullmatch(re.escape(profile.PREFIX)+r'/lyrics/[A-Za-z0-9_-]{1,160}/timing',parsed.path):
+            raw=bytearray()
+            for chunk in chunks(handler.rfile,handler.headers):
+                raw.extend(chunk)
+                if len(raw)>1024:raise profile.ProfileError(413)
+            try:value=json.loads(raw)
+            except (ValueError,UnicodeError):raise profile.ProfileError(400) from None
+            if not isinstance(value,dict) or set(value)!={'offsetMs','revision'}:raise profile.ProfileError(400)
+            result=LYRICS.set_timing(identity,parsed.path.split('/')[-2],value['offsetMs'],value['revision'])
         elif handler.command=='GET' and not parsed.query and re.fullmatch(re.escape(profile.PREFIX)+r'/lyrics/[A-Za-z0-9_-]{1,160}',parsed.path):
             result=LYRICS.get(identity,parsed.path.rsplit('/',1)[1])
         else:raise profile.ProfileError(400 if parsed.query else 405)
