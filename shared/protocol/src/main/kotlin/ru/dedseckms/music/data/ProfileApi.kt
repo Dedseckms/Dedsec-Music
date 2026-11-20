@@ -102,6 +102,20 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
             JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 524288), Charsets.UTF_8))
         }
     }
+    fun saveLyricsTiming(id: String, offsetMs: Long, revision: String): JSONObject {
+        require(id.isNotBlank() && id.length <= 128 && id.none { it == '/' || it == '\\' || it.code < 32 } && id !in setOf(".", ".."))
+        require(offsetMs in -10000..10000 && revision.matches(Regex("[0-9a-f]{64}")))
+        val body = JSONObject().put("offsetMs", offsetMs).put("revision", revision).toString().toRequestBody("application/json".toMediaType())
+        return authorized { jwt -> Request.Builder().url(endpoint("dedsec/profile/v1/lyrics").newBuilder().addPathSegment(id).addPathSegment("timing").build())
+            .header("Authorization", "Bearer $jwt").post(body).build() }.use {
+            if (!it.isSuccessful) throw IOException(when (it.code) {
+                403 -> "Синхронизацию может менять только владелец сервера"
+                409 -> "Текст изменился. Обнови его и настрой синхронизацию заново"
+                else -> "Не удалось сохранить синхронизацию на сервере"
+            })
+            JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 524288), Charsets.UTF_8))
+        }
+    }
     fun upload(filename: String, length: Long, open: () -> InputStream, progress: (Long, Long) -> Unit) {
         val safe = UploadApi.safeFilename(filename); UploadPolicy.checkBytes(length)
         // Upload bodies cannot be retried after publication: a failed response is reported for explicit recovery.

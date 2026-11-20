@@ -10,8 +10,8 @@ android {
         applicationId = "ru.dedseckms.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.7.3"
+        versionCode = 15
+        versionName = "0.7.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

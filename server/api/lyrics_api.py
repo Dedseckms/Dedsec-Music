@@ -179,7 +179,9 @@ def external_lyrics(song):
 
 
 class Manager:
-    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics):
+    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics,protected_owner=None):
+        self.protected_owner=protected_owner or os.environ.get('MUSIC_PROTECTED_OWNER_ID') or None
+        if self.protected_owner is not None and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',self.protected_owner):raise ValueError('Invalid protected owner ID')
         self.catalog=catalog;self.guard=guard or (lambda identity:None);self.native=native;self.external=external
         self.folder=Path(state)/'lyrics';self.folder.mkdir(mode=0o700,parents=True,exist_ok=True)
         if self.folder.resolve()!=self.folder or self.folder.is_symlink():raise ValueError('Physical lyrics cache required')
@@ -187,7 +189,9 @@ class Manager:
         if self.path.is_symlink():raise ValueError('Physical lyrics database required')
         self.lock=threading.RLock();self.stop=threading.Event();self.work=queue.Queue(maxsize=32);self.pending=set();self.limits={};self.thread=None
         self.external_retry=0
-        with self.db() as db:db.execute('CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY,value TEXT NOT NULL,expires REAL NOT NULL,updated REAL NOT NULL)')
+        with self.db() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY,value TEXT NOT NULL,expires REAL NOT NULL,updated REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS timing(song TEXT PRIMARY KEY,version TEXT NOT NULL,revision TEXT NOT NULL,offset_ms INTEGER NOT NULL,updated REAL NOT NULL)')
         self.path.chmod(0o600);self.file_lock=None
         if start:
             import fcntl
@@ -229,11 +233,38 @@ class Manager:
             if len(self.limits)>1000:raise profile.ProfileError(429)
             # Visibility was checked before looking at a global content cache.
             with self.db() as db:row=db.execute('SELECT value FROM cache WHERE key=? AND expires>?',(version,now)).fetchone()
-            if row:return json.loads(row[0])
+            if row:return self.decorate(identity,key,version,json.loads(row[0]))
             if version not in self.pending:
-                if self.work.full():return response('error')
+                if self.work.full():return self.decorate(identity,key,version,response('error'))
                 self.pending.add(version);self.work.put_nowait((identity.copy(),song,version,now))
-        return response('pending')
+        return self.decorate(identity,key,version,response('pending'))
+
+    def decorate(self,identity,key,version,value):
+        # Adjustments are separate from provider data and never rewrite source timestamps.
+        value=dict(value);value['timingOffsetMs']=0
+        value['canEditTiming']=bool(self.protected_owner and identity['id']==self.protected_owner and value.get('synced') and value.get('status')=='ready')
+        with self.db() as db:
+            row=db.execute('SELECT offset_ms FROM timing WHERE song=? AND version=? AND revision=?',(key,version,value.get('revision',''))).fetchone()
+        if row:value['timingOffsetMs']=row[0]
+        return value
+
+    def set_timing(self,identity,key,offset,revision):
+        self.guard(identity)
+        # Promoted administrators cannot change the owner's library calibration.
+        if not self.protected_owner or identity['id']!=self.protected_owner:raise profile.ProfileError(403)
+        if type(offset) is not int or not -10000<=offset<=10000 or not isinstance(revision,str) or not re.fullmatch(r'[a-f0-9]{64}',revision):raise profile.ProfileError(400)
+        song,version=self.song(identity['id'],key)
+        with self.lock:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                row=db.execute('SELECT value FROM cache WHERE key=? AND expires>?',(version,time.time())).fetchone()
+                if not row:raise profile.ProfileError(409)
+                value=json.loads(row[0])
+                if value.get('status')!='ready' or not value.get('synced') or value.get('revision')!=revision:raise profile.ProfileError(409)
+                self.guard(identity)
+                if self.song(identity['id'],key)[1]!=version:raise profile.ProfileError(409)
+                db.execute('INSERT OR REPLACE INTO timing VALUES(?,?,?,?,?)',(key,version,revision,offset,time.time()))
+            return self.decorate(identity,key,version,value)
 
     def process(self,item):
         identity,song,key,queued=item
