@@ -26,7 +26,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "DedSec Music"
-            packageVersion = "0.4.3"
+            packageVersion = "0.4.4"
             description = "Your library. Your rhythm."
             vendor = "Dedseckms"
             copyright = "Copyright 2026 Dedseckms"

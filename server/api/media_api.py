@@ -49,7 +49,7 @@ def configure(upload,lyrics):
 
 
 def owns(path):
-    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads') or path.startswith(profile.PREFIX+'/lyrics/')
+    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads',profile.PREFIX+'/lyrics-batch') or path.startswith(profile.PREFIX+'/lyrics/')
 
 
 def dispatch(handler,chunks):
@@ -67,6 +67,18 @@ def dispatch(handler,chunks):
             audio.filename(query)
             if handler.headers.get('Content-Length') and int(handler.headers['Content-Length'])>audio.MAX_BYTES:raise audio.Rejected(413)
             result=UPLOAD(identity,query,chunks(handler.rfile,handler.headers))
+        elif parsed.path==profile.PREFIX+'/lyrics-batch' and not parsed.query:
+            if handler.command=='GET':result=LYRICS.batch.status(identity)
+            elif handler.command=='POST':
+                raw=bytearray()
+                for chunk in chunks(handler.rfile,handler.headers):
+                    raw.extend(chunk)
+                    if len(raw)>1024:raise profile.ProfileError(413)
+                try:value=json.loads(raw)
+                except (ValueError,UnicodeError):raise profile.ProfileError(400) from None
+                if not isinstance(value,dict) or set(value)!={'action'}:raise profile.ProfileError(400)
+                result=LYRICS.batch.control(identity,value['action'])
+            else:raise profile.ProfileError(405)
         elif handler.command=='POST' and not parsed.query and re.fullmatch(re.escape(profile.PREFIX)+r'/lyrics/[A-Za-z0-9_-]{1,160}/timing',parsed.path):
             raw=bytearray()
             for chunk in chunks(handler.rfile,handler.headers):
