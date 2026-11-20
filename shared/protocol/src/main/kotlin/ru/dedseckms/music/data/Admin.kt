@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
-data class AdminUser(val id: String, val username: String, val isAdmin: Boolean, val uploadCount: Int, val canDelete: Boolean) {
-    companion object { fun parse(data: JSONObject) = AdminUser(data.getString("id"), data.getString("username"), data.optBoolean("isAdmin"), data.optInt("uploadCount"), data.optBoolean("canDelete")) }
+data class AdminUser(val id: String, val username: String, val isAdmin: Boolean, val uploadCount: Int, val canDelete: Boolean, val canChangeRole: Boolean = false) {
+    companion object { fun parse(data: JSONObject) = AdminUser(data.getString("id"), data.getString("username"), data.optBoolean("isAdmin"), data.optInt("uploadCount"), data.optBoolean("canDelete"), data.optBoolean("canChangeRole")) }
 }
 data class AdminUpload(val name: String, val source: String, val size: Long) {
     companion object { fun parse(data: JSONObject) = AdminUpload(data.getString("name"), data.optString("source"), data.optLong("size")) }
@@ -54,6 +54,11 @@ class AdminSession(parent: CoroutineScope, private val api: ProfileApi) : AutoCl
         api.await { adminDelete(user.id) }
         val users = api.await { adminUsers() }
         mutable.value = AdminState(users = users, busy = true, message = "Аккаунт удалён. Общая музыка сохранена")
+    }
+    fun role(user: AdminUser) = action {
+        api.await { adminSetRole(user.id, !user.isAdmin) }
+        val users = api.await { adminUsers() }
+        mutable.value = mutable.value.copy(users = users, message = if (user.isAdmin) "Права администратора сняты" else "Пользователь назначен администратором")
     }
     override fun close() { job.cancel() }
 }

@@ -175,6 +175,10 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")))
         adminRequest("users/$id", "DELETE")
     }
+    fun adminSetRole(id: String, isAdmin: Boolean) {
+        require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")))
+        adminRequest("users/$id/role", "POST", JSONObject().put("isAdmin", isAdmin))
+    }
     fun adminSystem(windowSeconds: Int = 3600): ServerSystem = ServerSystem.parse(adminRequest("system?windowSeconds=${windowSeconds.coerceIn(300, 86400)}&points=240"))
     fun adminStorage(): ServerStorage = ServerStorage.parse(adminRequest("storage"))
     fun adminStoragePlan(shard: String, volume: String): StoragePlan = StoragePlan.parse(adminRequest("storage/plans", "POST", JSONObject().put("sourceShardId", shard).put("targetVolumeId", volume)))
@@ -194,7 +198,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
     }.use {
         if (!it.isSuccessful) throw IOException(when (it.code) {
             403 -> "Управление доступно только администратору"
-            409 -> if (path.startsWith("users")) "Имя занято или аккаунт нельзя удалить" else "Состояние дисков изменилось. Обнови данные и подготовь план заново"
+            409 -> if (path.endsWith("/role")) "Нельзя изменить права этого аккаунта. Обнови список пользователей" else if (path.startsWith("users")) "Имя занято или аккаунт нельзя удалить" else "Состояние дисков изменилось. Обнови данные и подготовь план заново"
             400, 422 -> if (path.startsWith("users")) "Проверь логин и пароль: минимум 12 символов" else "Проверь выбранные диски и план копирования"
             404 -> if (path.startsWith("users")) "Управление пользователями пока не включено на сервере" else "Обнови серверное дополнение для статистики и управления дисками"
             503 -> "Сервер собирает показатели или временно занят. Попробуй через несколько секунд"

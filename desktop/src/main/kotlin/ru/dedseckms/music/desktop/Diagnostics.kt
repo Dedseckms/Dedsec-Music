@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
+import ru.dedseckms.music.data.*
 
 /** Renders the production composables with sample data, without reading or capturing a desktop. */
 fun renderGallery(output: Path) = runBlocking(Dispatchers.Main) {
@@ -37,6 +38,41 @@ fun renderGallery(output: Path) = runBlocking(Dispatchers.Main) {
         }
         println("Nine production UI screenshots rendered with demo data, including glass, search and 960x600.")
     } finally { controller.close() }
+}
+
+/** Renders the real lyric stage with local, original sample artwork and timed text. */
+fun renderLyricsPreview(output: Path) = runBlocking(Dispatchers.Main) {
+    Files.createDirectories(output)
+    val fixture = output.resolve(".lyrics-fixture")
+    Files.createDirectories(fixture.resolve("covers"))
+    val image = java.awt.image.BufferedImage(512, 512, java.awt.image.BufferedImage.TYPE_INT_RGB)
+    image.createGraphics().apply {
+        paint = java.awt.GradientPaint(0f, 0f, java.awt.Color(35, 31, 98), 512f, 512f, java.awt.Color(210, 106, 82))
+        fillRect(0, 0, 512, 512)
+        color = java.awt.Color(230, 179, 133); fillOval(128, 100, 256, 256)
+        color = java.awt.Color(49, 40, 91); fillOval(100, 288, 400, 300)
+        color = java.awt.Color(243, 210, 178); font = java.awt.Font("SansSerif", java.awt.Font.BOLD, 32); drawString("DEDSEC SESSIONS", 42, 465)
+        dispose()
+    }
+    javax.imageio.ImageIO.write(image, "jpg", fixture.resolve("covers/${sha256("preview:384")}.jpg").toFile())
+    val cache = fixture.resolve("lyrics.json").toFile()
+    val lines = listOf("Тихий город за окном", "Мы выбираем свой маршрут", "Этот ритм звучит со мной", "И минуты не спешат", "Свет рисует новый день", "Музыка всегда с тобой")
+    cache.writeText(org.json.JSONObject().put("status", "ready").put("synced", true).put("source", "Демонстрация").put("revision", "preview")
+        .put("lines", org.json.JSONArray(lines.mapIndexed { index, text -> org.json.JSONObject().put("startMs", index * 15_000).put("text", text) })).toString())
+    val covers = DesktopCovers(NavApi(Credentials("https://preview.invalid", "preview", "unused")), fixture)
+    val song = Song("preview", "Полуночный маршрут", "DedSec Sessions", album = "Тихий город", coverArt = "preview")
+    for ((name, width, height) in listOf(Triple("desktop-lyrics", 1080, 680), Triple("desktop-lyrics-compact", 700, 430))) {
+        val scene = ImageComposeScene(width = width, height = height, density = Density(1f), coroutineContext = coroutineContext) {
+            androidx.compose.material3.MaterialTheme(colorScheme = appearanceColors(Appearance())) {
+                LyricsStage(song, 31_000, null, cache, covers, {}, {})
+            }
+        }
+        try {
+            repeat(15) { scene.render(it * 100_000_000L).close(); delay(50) }
+            scene.render(2_000_000_000L).use { frame -> frame.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)?.use { Files.write(output.resolve("$name.png"), it.bytes) } }
+        } finally { scene.close() }
+    }
+    println("Production lyric stage rendered at wide and compact sizes with local timed lyrics.")
 }
 
 /** Exercises bundled libVLC using a generated silent WAV, without network or account credentials. */

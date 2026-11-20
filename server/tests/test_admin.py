@@ -36,6 +36,7 @@ class Native:
             if self.fail_assignment: raise admin.AdminError(503, 'NATIVE_UNAVAILABLE')
             self.rows[uid]['libraries'] = [{'id': x} for x in payload['libraryIds']]; return {}
         if method == 'DELETE': self.rows.pop(uid); return None
+        if method == 'PUT': self.rows[uid].update(payload)
         return copy.deepcopy(self.rows[uid])
 
 
@@ -59,6 +60,61 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.native.rows['new']['libraries'], [{'id': '1'}, {'id': '2'}])
         self.assertEqual(len(list(self.api.folder.glob('before-account-*.sqlite'))), 1)
         self.assertNotIn(b'a-safe-test-password', self.api.path.read_bytes())
+
+    def test_promote_demote_and_idempotent_role(self):
+        self.assertFalse(self.api.list(self.owner)['users'][0]['canChangeRole'])
+        result = self.api.role(self.owner, 'friend', {'isAdmin': True})
+        self.assertTrue(result['ok']); self.assertTrue(result['user']['isAdmin'])
+        self.assertTrue(result['user']['canChangeRole'])
+        count = len(self.native.mutations)
+        self.api.role(self.owner, 'friend', {'isAdmin': True})
+        self.assertEqual(len(self.native.mutations), count)
+        self.assertFalse(self.api.role(self.owner, 'friend', {'isAdmin': False})['user']['isAdmin'])
+        self.assertEqual(self.native.rows['friend']['userName'], 'Friend')
+        self.assertEqual(len(list(self.api.folder.glob('before-account-*.sqlite'))), 2)
+
+    def test_role_rejects_self_invalid_and_stale_admin_before_write(self):
+        for uid, data, code in [('owner', {'isAdmin': False}, 'SELF_ROLE_FORBIDDEN'),
+                                ('absent', {'isAdmin': True}, 'USER_NOT_FOUND'),
+                                ('friend', {'isAdmin': 1}, 'INVALID_REQUEST'),
+                                ('friend', {'isAdmin': 'false'}, 'INVALID_REQUEST'),
+                                ('friend', {'isAdmin': True, 'password': 'x'}, 'INVALID_REQUEST')]:
+            with self.assertRaises(admin.AdminError) as caught:self.api.role(self.owner, uid, data)
+            self.assertEqual(caught.exception.code, code)
+        self.native.rows['owner']['isAdmin'] = False
+        with self.assertRaises(admin.AdminError) as caught:self.api.role(self.owner, 'friend', {'isAdmin': True})
+        self.assertEqual(caught.exception.status, 403); self.assertFalse(self.native.mutations)
+
+    def test_role_readback_failure_is_not_success(self):
+        original = self.native.__call__
+        def ignored(token, path, method='GET', payload=None):
+            return {} if method == 'PUT' else original(token, path, method, payload)
+        with patch.object(admin, 'native', ignored), self.assertRaises(admin.AdminError) as caught:
+            self.api.role(self.owner, 'friend', {'isAdmin': True})
+        self.assertEqual(caught.exception.code, 'ROLE_UNCONFIRMED')
+
+    def test_pinned_owner_protected_from_another_admin(self):
+        self.api.protected_owner = 'owner'; self.native.rows['friend']['isAdmin'] = True
+        other={'id':'friend','token':'fixture'}
+        row=next(row for row in self.api.list(other)['users'] if row['id']=='owner')
+        self.assertFalse(row['canDelete']);self.assertFalse(row['canChangeRole'])
+        for operation in (lambda:self.api.delete(other,'owner'),lambda:self.api.role(other,'owner',{'isAdmin':False})):
+            with self.assertRaises(admin.AdminError) as caught:operation()
+            self.assertEqual(caught.exception.code,'OWNER_PROTECTED')
+        self.assertFalse(self.native.mutations)
+
+    def test_native_demotion_during_backup_cannot_delete_or_revoke_target(self):
+        def revoke():self.native.rows['owner']['isAdmin']=False
+        with patch.object(self.api,'backup',side_effect=revoke),self.assertRaises(admin.AdminError) as caught:
+            self.api.delete(self.owner,'friend')
+        self.assertEqual(caught.exception.status,403);self.assertFalse(self.api.blocked('Friend'));self.assertFalse(self.native.mutations)
+
+    def test_native_target_edit_during_backup_is_not_overwritten(self):
+        def edit():self.native.rows['friend'].update(name='New name',email='new@example.test')
+        with patch.object(self.api,'backup',side_effect=edit),self.assertRaises(admin.AdminError) as caught:
+            self.api.role(self.owner,'friend',{'isAdmin':True})
+        self.assertEqual(caught.exception.code,'ACCOUNT_CHANGED');self.assertFalse(self.native.mutations)
+        self.assertEqual(self.native.rows['friend']['name'],'New name')
 
     def test_compensate_library_assignment_failure_exact_new_user_only(self):
         self.native.fail_assignment = True

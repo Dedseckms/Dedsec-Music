@@ -16,6 +16,7 @@ import urllib.parse
 import profile_api as profile
 from radio_catalog import Catalog,dto,epoch
 from radio_features import Index
+from radio_neural import Cache as NeuralCache,affinity,WORKER_ROUTE
 
 PREFIX='/dedsec/profile/v1/radio/'
 MOODS={'ANY','ENERGY','CHILL','FOCUS','WORKOUT','PARTY','SAD','HAPPY'}
@@ -82,6 +83,7 @@ class Engine:
         if self.path.is_symlink():raise ValueError('Physical radio feedback required')
         self.lock=threading.RLock();self.mix_slot=threading.BoundedSemaphore(1);self.limits={}
         self.rng=rng or random.SystemRandom()
+        self.neural=NeuralCache(folder,catalog,getattr(index,'slot',None))
         with self.db() as db:
             db.executescript('''CREATE TABLE IF NOT EXISTS feedback(uid TEXT NOT NULL,id TEXT NOT NULL,skips INTEGER NOT NULL DEFAULT 0,
                 plays INTEGER NOT NULL DEFAULT 0,disliked INTEGER NOT NULL DEFAULT 0,updated INTEGER NOT NULL,last_kind TEXT,last_event INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(uid,id));
@@ -117,14 +119,16 @@ class Engine:
             feedback={row['id']:dict(row) for row in db.execute('SELECT * FROM feedback WHERE uid=?',(uid,))}
             served={row['id']:row['at'] for row in db.execute('SELECT id,at FROM served WHERE uid=? AND at>?',(uid,now-21600_000))}
         history={item['id']:item for item in request['history'] if item['id'] in songs}
-        denied=set(request['dislikedIds'])|set(request['excludeIds'])|{key for key,row in feedback.items() if row['disliked']}
-        genres=collections.Counter();artists=collections.Counter();known={}
+        disliked=set(request['dislikedIds'])|{key for key,row in feedback.items() if row['disliked']}
+        denied=disliked|set(request['excludeIds'])
+        genres=collections.Counter();artists=collections.Counter();known={};neural_weights={}
         for key,song in songs.items():
             own=feedback.get(key,{});client=history.get(key,{})
             count=max(int(song.get('play_count') or 0),client.get('count',0))+own.get('plays',0)
             known[key]=count
             weight=(8 if song.get('starred') else 0)+min(4,math.log2(1+count))-.8*min(5,own.get('skips',0))
-            if key in denied:weight=-3
+            if key in disliked:weight=-3
+            neural_weights[key]=weight+min(3,own.get('completions',0))
             for genre in song['genres']:genres[genre]+=weight/max(1,len(song['genres']))
             artists[artist(song)]+=weight
         genre_peak=max(1,max(genres.values(),default=1));artist_peak=max(1,max(artists.values(),default=1))
@@ -147,10 +151,17 @@ class Engine:
             if request['mode']=='DISCOVERY' and tier:weight/=1+known[key]
             elif request['mode']=='BALANCED' and not known[key]:weight*=1.4
             candidates.append((weight,key,tier))
+        neural_keys=[key for _,key,_ in heapq.nlargest(256,candidates)]
+        neural_keys+=heapq.nlargest(64,neural_weights,key=neural_weights.get)
+        neural_keys+=heapq.nsmallest(32,(key for key in neural_weights if neural_weights[key]<0),key=neural_weights.get)
+        vectors=self.neural.available({key:songs[key] for key in dict.fromkeys(neural_keys)})
+        neural_scores=affinity(vectors,neural_weights)
+        candidates=[(weight*math.exp(neural_scores.get(key,0)),key,tier) for weight,key,tier in candidates]
         def initial_taste(key):
             song=songs[key]
             return (8 if song.get('starred') else 0)+min(4,math.log2(1+known[key]))+sum(genres[g]/genre_peak for g in song['genres'])
         self.index.prioritize([key for _,key,_ in heapq.nlargest(100,candidates)]+heapq.nlargest(100,pending,key=initial_taste))
+        self.neural.prioritize(heapq.nlargest(64,neural_weights,key=neural_weights.get)+[key for _,key,_ in heapq.nlargest(100,candidates)])
         # Exponential races give weighted sampling without replacement across the full catalogue.
         # Draw only once per candidate; adjacent-artist/transition guards sequence this sampled band.
         sampled=[(tier,-math.log(max(1e-12,self.rng.random()))/weight,key) for weight,key,tier in candidates]
@@ -223,6 +234,9 @@ def from_environment(slot=None):
 def dispatch(handler,chunks):
     parsed=urllib.parse.urlsplit(handler.path)
     if not parsed.path.startswith(PREFIX):return None
+    if parsed.path.startswith(WORKER_ROUTE):
+        if ENGINE is None:profile.send(handler,503,{'error':'radio_unavailable'});return 503
+        return ENGINE.neural.dispatch(handler,chunks)
     try:
         if parsed.query:raise Rejected(400)
         if parsed.path not in (PREFIX+'mix',PREFIX+'events'):raise Rejected(404)

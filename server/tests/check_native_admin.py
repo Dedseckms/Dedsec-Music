@@ -70,6 +70,16 @@ def main(binary,parent):
                 wfile=Writer()
             if admin.dispatch(Handler(),lambda *_:[])!=403:raise RuntimeError('Ordinary admin access allowed')
             if len(policy.list(identity)['users'])!=2:raise RuntimeError('Native list failed')
+            original=admin.native(identity['token'],'/api/user/'+friend_id)
+            promoted=policy.role(identity,friend_id,{'isAdmin':True})
+            if promoted['user']['isAdmin'] is not True:raise RuntimeError('Native promotion failed')
+            if admin.dispatch(Handler(),lambda *_:[])!=200:raise RuntimeError('Fresh promotion not visible to old JWT')
+            demoted=policy.role(identity,friend_id,{'isAdmin':False})
+            if demoted['user']['isAdmin'] is not False:raise RuntimeError('Native demotion failed')
+            if admin.dispatch(Handler(),lambda *_:[])!=403:raise RuntimeError('Old admin JWT survived demotion')
+            after=admin.native(identity['token'],'/api/user/'+friend_id)
+            if any(after.get(k)!=original.get(k) for k in ('userName','name','email','scrobbleFilter','libraries')):raise RuntimeError('Role change modified account metadata')
+            auth('/auth/login',{'username':'fixture-friend','password':friend_password})
             retained=library/'retained.mp3';retained.write_bytes(b'fixture-audio-retained')
             policy.delete(identity,friend_id)
             if not retained.is_file() or not policy.blocked('fixture-friend'):raise RuntimeError('Delete retention failed')
@@ -78,7 +88,8 @@ def main(binary,parent):
             else:raise RuntimeError('Deleted native JWT remained accepted')
             (folder/'proof.json').write_text(json.dumps({'version':'0.64.2','nativeAdminRole':True,'ordinary403':True,
                 'regularCreateAllLibraries':True,'uploaderLoginSamePassword':True,'consistentBackup':True,
-                'nativeDeleteOldJWTRejected':True,'audioRetained':True,'noUsernameReuse':True},indent=2))
+                'nativeDeleteOldJWTRejected':True,'audioRetained':True,'noUsernameReuse':True,
+                'promoteDemoteFreshRoleOldJWT':True,'roleMetadataPasswordPreserved':True},indent=2))
             print('PASS native0.64.2 admin: create/libraries/login/ordinary403/delete/JWT revocation/audio retention. Fixture:',folder)
         finally:
             password=friend_password=''

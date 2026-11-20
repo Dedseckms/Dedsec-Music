@@ -79,9 +79,10 @@ internal fun SwipeCover(currentIndex: Int, keys: List<String>, select: (Int) -> 
 
 /** Downward scroll collapses only after the content has reached its top. Horizontal seeking stays native. */
 @Composable
-internal fun SwipePlayerSurface(scroll: ScrollState, dismiss: () -> Unit, content: @Composable () -> Unit) {
+internal fun SwipePlayerSurface(scroll: ScrollState, dismiss: () -> Unit, allowCollapse: Boolean = true, content: @Composable () -> Unit) {
     var offset by remember { mutableFloatStateOf(0f) }
     val onDismiss by rememberUpdatedState(dismiss)
+    val collapseEnabled by rememberUpdatedState(allowCollapse)
     val density = LocalDensity.current
     val threshold = with(density) { 96.dp.toPx() }
     val velocityThreshold = with(density) { 850.dp.toPx() }
@@ -89,7 +90,7 @@ internal fun SwipePlayerSurface(scroll: ScrollState, dismiss: () -> Unit, conten
     val connection = remember(scroll, threshold, velocityThreshold) { object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (source != NestedScrollSource.UserInput) return Offset.Zero
-            if ((available.y > 0 && scroll.value == 0) || offset > 0) {
+            if ((available.y > 0 && scroll.value == 0 && collapseEnabled) || offset > 0) {
                 val previous = offset
                 offset = (offset + available.y).coerceAtLeast(0f)
                 return Offset(0f, offset - previous)

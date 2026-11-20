@@ -546,7 +546,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun seek(position: Long) { controller?.seekTo(position) }
     fun shuffle() { if (state.value.waveActive) return; mixTask.cancel(); mutable.update { it.copy(mixLoading = false) }; controller?.sendCustomCommand(SessionCommand(SHUFFLE_COMMAND, Bundle.EMPTY), Bundle.EMPTY) }
-    fun repeat() { controller?.let { it.repeatMode = if (it.repeatMode == Player.REPEAT_MODE_OFF) (if (state.value.waveActive) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL) else Player.REPEAT_MODE_OFF } }
+    fun repeat() { controller?.let { player ->
+        val current = when (player.repeatMode) { Player.REPEAT_MODE_ONE -> PlaybackRepeat.ONE; Player.REPEAT_MODE_ALL -> PlaybackRepeat.ALL; else -> PlaybackRepeat.OFF }
+        player.repeatMode = when (current.next(state.value.waveActive)) { PlaybackRepeat.OFF -> Player.REPEAT_MODE_OFF; PlaybackRepeat.ALL -> Player.REPEAT_MODE_ALL; PlaybackRepeat.ONE -> Player.REPEAT_MODE_ONE }
+    } }
     fun dislike() { state.value.now?.let { song ->
         local()?.dislike(song.id)
         val profile = app.profileApi(); val position = state.value.position; val duration = state.value.duration

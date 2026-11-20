@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --disable-pip-version-check --only-binary=:all: --require-hashes -r requirements.txt
 COPY audio.py profile_api.py server.py yandex_import.py yandex_source.py import_errors.py import_playlists.py ./
-COPY radio.py radio_catalog.py radio_features.py ./
+COPY radio.py radio_catalog.py radio_features.py radio_neural.py ./
 COPY admin_api.py ./
 COPY system_admin.py system_stats.py storage_jobs.py ./
 COPY media_api.py lyrics_api.py ./

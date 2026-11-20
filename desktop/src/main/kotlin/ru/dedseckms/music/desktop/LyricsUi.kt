@@ -1,5 +1,10 @@
 package ru.dedseckms.music.desktop
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,7 +16,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.dedseckms.music.data.*
 import java.io.File
@@ -29,10 +39,10 @@ import java.io.File
     val active = lyrics?.activeLine(position + offset) ?: -1
     LaunchedEffect(dragged) { if (dragged) follow = false }
     LaunchedEffect(active, follow) { if (follow && active >= 0) list.animateScrollToItem((active - 1).coerceAtLeast(0)) }
-    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surface) {
+    Surface(shape = MaterialTheme.shapes.extraLarge, color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onSurface) {
         Column(Modifier.fillMaxSize().padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text(song.title, style = MaterialTheme.typography.titleLarge, maxLines = 2); Text(song.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column(Modifier.weight(1f)) { Text("Текст песни", style = MaterialTheme.typography.titleLarge); Text(if (lyrics?.synced == true) "В такт музыке" else "Слова твоего трека", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 IconButton(session::refresh) { Icon(Icons.Rounded.Refresh, "Обновить текст") }
                 IconButton(dismiss) { Icon(Icons.Rounded.Close, "Закрыть текст") }
             }
@@ -48,10 +58,12 @@ import java.io.File
             if (lyrics != null && lyrics.lines.isNotEmpty()) {
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                     itemsIndexed(lyrics.lines) { index, line ->
+                        val highlighted = !lyrics.synced || index == active
+                        val color by animateColorAsState(if (highlighted) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .65f), tween(350), label = "lyric-color")
+                        val scale by animateFloatAsState(if (highlighted) 1f else .95f, tween(350), label = "lyric-emphasis")
                         Text(line.text.ifBlank { "♪" }, style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = if (active == index) FontWeight.Bold else FontWeight.Medium,
-                            color = if (!lyrics.synced || index == active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .65f),
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = line.startMs != null) { line.startMs?.let { seek((it - offset).coerceAtLeast(0)); follow = true } })
+                            fontWeight = FontWeight.SemiBold, color = color,
+                            modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin(0f, .5f) }.clickable(enabled = line.startMs != null) { line.startMs?.let { seek((it - offset).coerceAtLeast(0)); follow = true } })
                     }
                 }
             } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -61,8 +73,40 @@ import java.io.File
         }
     }
 }
-@Composable internal fun LyricsDialog(song: Song, position: Long, api: ProfileApi?, cache: File?, seek: (Long) -> Unit, dismiss: () -> Unit) {
-    androidx.compose.ui.window.DialogWindow(onCloseRequest = dismiss, title = "Текст песни", state = androidx.compose.ui.window.rememberDialogState(width = 640.dp, height = 720.dp)) {
-        LyricsContent(song, position, api, cache, seek, dismiss)
+@Composable internal fun LyricsPlayer(controller: DesktopController, song: Song, position: Long, dismiss: () -> Unit) {
+    LyricsStage(song, position, controller.lyricsApi(), controller.lyricsCache(song), controller.covers, controller.audio::seek, dismiss)
+}
+@Composable internal fun LyricsStage(song: Song, position: Long, api: ProfileApi?, cache: File?, covers: DesktopCovers?, seek: (Long) -> Unit, dismiss: () -> Unit) {
+    val artwork by produceState<ImageBitmap?>(null, song.coverArt, covers) {
+        value = covers?.get(song.coverArt, 384)
+    }
+    val fallback = MaterialTheme.colorScheme.primary
+    val accent = remember(artwork, fallback) {
+        artwork?.let { image ->
+            val pixels = image.toPixelMap()
+            val colors = (1..5).flatMap { x -> (1..5).map { y -> pixels[image.width * x / 6, image.height * y / 6] } }
+            Color(colors.map { it.red }.average().toFloat(), colors.map { it.green }.average().toFloat(), colors.map { it.blue }.average().toFloat())
+        } ?: fallback
+    }
+    val surface = MaterialTheme.colorScheme.surface
+    BoxWithConstraints(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(lerp(surface, accent, .28f), surface, lerp(surface, accent, .12f))))) {
+        val roomy = maxWidth > 620.dp
+        val coverLimit = (maxHeight - 230.dp).coerceAtLeast(80.dp)
+        val showAlbum = maxHeight > 450.dp
+        Row(Modifier.fillMaxSize().padding(if (roomy) 28.dp else 12.dp), horizontalArrangement = Arrangement.spacedBy(if (roomy) 28.dp else 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(if (roomy) .42f else .36f), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                val cover = Modifier.widthIn(max = coverLimit).fillMaxWidth().aspectRatio(1f).shadow(22.dp, MaterialTheme.shapes.extraLarge).clip(MaterialTheme.shapes.extraLarge)
+                if (artwork != null) Image(artwork!!, song.album.ifBlank { song.title }, cover, contentScale = ContentScale.Crop)
+                else Cover(song.coverArt, song.album.ifBlank { song.title }, cover, 28)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(song.title, style = if (roomy) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(song.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    if (showAlbum) Text(song.album, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
+            }
+            Box(Modifier.weight(if (roomy) .58f else .64f).fillMaxHeight()) {
+                key(song.id) { LyricsContent(song, position, api, cache, seek, dismiss) }
+            }
+        }
     }
 }

@@ -25,6 +25,7 @@ import ru.dedseckms.music.data.*
     val state by session.state.collectAsState()
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<AdminUser?>(null) }
+    var role by remember { mutableStateOf<AdminUser?>(null) }
     Dialog(onDismissRequest = dismiss) {
         Surface(shape = MaterialTheme.shapes.extraLarge) {
             Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -47,6 +48,7 @@ import ru.dedseckms.music.data.*
                                 leadingContent = { Icon(Icons.Rounded.Person, null) },
                                 trailingContent = { Row {
                                     IconButton({ session.uploads(user) }, enabled = !state.busy) { Icon(Icons.Rounded.LibraryMusic, "Что добавил") }
+                                    if (user.canChangeRole) IconButton({ role = user }, enabled = !state.busy) { Icon(Icons.Rounded.AdminPanelSettings, if (user.isAdmin) "Снять права администратора" else "Назначить администратором", tint = if (user.isAdmin) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                                     if (user.canDelete) IconButton({ deleting = user }, enabled = !state.busy) { Icon(Icons.Rounded.PersonRemove, "Удалить аккаунт") }
                                 } })
                         }
@@ -79,6 +81,11 @@ import ru.dedseckms.music.data.*
             confirmButton = { TextButton({ session.create(username.trim(), password); password = ""; creating = false },
                 enabled = username.isNotBlank() && password.length >= 12 && password.toByteArray().size <= 72) { Text("Создать") } },
             dismissButton = { TextButton({ password = ""; creating = false }) { Text("Отмена") } })
+    }
+    role?.let { user ->
+        AlertDialog(onDismissRequest = { role = null }, title = { Text(if (user.isAdmin) "Снять права у ${user.username}?" else "Назначить ${user.username} администратором?") },
+            text = { Text(if (user.isAdmin) "Личная музыка и плейлисты сохранятся. Управление сервером станет недоступно." else "Пользователь сможет управлять аккаунтами, видеть статистику сервера и управлять хранилищем.") },
+            confirmButton = { TextButton({ session.role(user); role = null }) { Text("Подтвердить") } }, dismissButton = { TextButton({ role = null }) { Text("Отмена") } })
     }
     deleting?.let { user ->
         AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Удалить ${user.username}?") },

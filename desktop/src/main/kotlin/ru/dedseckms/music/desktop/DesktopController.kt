@@ -28,6 +28,9 @@ data class DesktopState(
     val playlistBusy: Boolean = false, val transfer: String? = null, val more: Boolean = true,
 )
 
+internal fun DesktopState.beginQueue(wave: Boolean, source: String) = copy(wave = wave, source = source, shuffle = false,
+    repeat = !wave && repeat, repeatOne = this.wave == wave && repeatOne)
+
 class DesktopController(val scope: CoroutineScope, private val preferences: DesktopPreferences = DesktopPreferences()) : AutoCloseable {
     private var appearance = preferences.read()
     private val preferenceLock = kotlinx.coroutines.sync.Mutex()
@@ -273,7 +276,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         if (state.value.demo) { notice("Это демонстрация интерфейса. Войди на сервер, чтобы слушать музыку"); return }
         if (songs.isEmpty()) return
         queueEpoch++; prepareJob?.cancel(); audio.clearNext()
-        queue.set(songs, index); mutable.update { it.copy(wave = wave, source = source, shuffle = false) }; playCurrent()
+        queue.set(songs, index); mutable.update { it.beginQueue(wave, source) }; playCurrent()
     }
     private fun playCurrent() {
         val song = queue.current ?: return; val nav = api ?: return; val local = store ?: return
@@ -290,7 +293,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     private fun prepareNext() {
         prepareJob?.cancel()
-        if (state.value.wave && state.value.repeatOne) { audio.clearNext(); return }
+        if (state.value.repeatOne) { audio.clearNext(); return }
         val position = if (queue.cursor + 1 < queue.order.size) queue.cursor + 1 else if (state.value.repeat && !state.value.wave && queue.order.size > 1) 0 else -1
         val index = queue.order.getOrNull(position)
         if (index == null || index == queue.order.getOrNull(queue.cursor)) { audio.clearNext(); return }
@@ -318,7 +321,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         prepareNext()
     }
     private fun onEnded() {
-        if (state.value.wave && state.value.repeatOne) playCurrent()
+        if (state.value.repeatOne) playCurrent()
         else if (queue.move(true, state.value.repeat && !state.value.wave)) playCurrent()
         else if (state.value.wave) { mutable.update { it.copy(ended = true) }; wave(keep = true) }
         else mutable.update { it.copy(ended = true) }
@@ -339,7 +342,14 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     fun select(index: Int) { invalidateMix(); if (queue.select(index)) playCurrent() }
     fun shuffle() { if (state.value.wave) return; invalidateMix(); prepareJob?.cancel(); audio.clearNext(); queue.shuffle(); mutable.update { it.copy(shuffle = queue.shuffled, queue = queue.order.map(queue.songs::get), cursor = queue.cursor) }; prepareNext() }
-    fun repeat() { mutable.update { if (it.wave) it.copy(repeatOne = !it.repeatOne) else it.copy(repeat = !it.repeat) }; prepareNext() }
+    fun repeat() {
+        mutable.update { state ->
+            val current = when { state.repeatOne -> PlaybackRepeat.ONE; state.repeat -> PlaybackRepeat.ALL; else -> PlaybackRepeat.OFF }
+            val next = current.next(state.wave)
+            state.copy(repeat = next == PlaybackRepeat.ALL, repeatOne = next == PlaybackRepeat.ONE)
+        }
+        prepareNext()
+    }
     fun wave(mood: MixMood = state.value.mood, mode: MixMode = state.value.mode, keep: Boolean = false) {
         val activeProfile = profile ?: return; val local = store ?: return; val revision = generation
         invalidateMix(); val mixToken = mixRevision

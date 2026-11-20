@@ -30,6 +30,10 @@ DedSec Music — открытый музыкальный клиент для And
 
 ![Главная DedSec Music](docs/assets/desktop-home.png)
 
+![Текст песни внутри плеера](docs/assets/desktop-lyrics.png)
+
+Текст рядом с обложкой, фон в её цветах и плавная подсветка строки. На изображении — демонстрационные обложка и строки.
+
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/desktop-library.png" alt="Библиотека, альбомы и личные плейлисты" /><br /><strong>Вся коллекция</strong> — треки, альбомы и личные плейлисты.</td>
