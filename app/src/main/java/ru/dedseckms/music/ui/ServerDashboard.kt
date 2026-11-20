@@ -1,5 +1,7 @@
 package ru.dedseckms.music.ui
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,11 +29,11 @@ import java.util.Locale
         val session = remember(api) { ServerAdminSession(scope, api) }
         DisposableEffect(session) { onDispose { session.close() } }
         val state by session.state.collectAsState()
-        DashboardSurface(dismiss) { DashboardBody(session, state, dismiss) }
+        DashboardSurface(dismiss) { DashboardBody(session, state, api, dismiss) }
     }
 }
 
-@Composable internal fun DashboardBody(session: ServerAdminSession, state: ServerAdminState, dismiss: () -> Unit) {
+@Composable internal fun DashboardBody(session: ServerAdminSession, state: ServerAdminState, api: ProfileApi? = null, dismiss: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     var source by remember { mutableStateOf("") }
     var target by remember { mutableStateOf("") }
@@ -46,14 +48,15 @@ import java.util.Locale
             IconButton(session::refresh, enabled = !state.acting) { Icon(Icons.Rounded.Refresh, "Обновить") }
             IconButton(dismiss) { Icon(Icons.Rounded.Close, "Закрыть") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Обзор", "Процессы", "Диски").forEachIndexed { i, title -> FilterChip(tab == i, { tab = i }, { Text(title) }) }
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Обзор", "Процессы", "Диски", "Тексты").forEachIndexed { i, title -> FilterChip(tab == i, { tab = i }, { Text(title) }) }
         }
         if (state.loading || state.acting) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { error -> Surface(color = colors.errorContainer, shape = RoundedCornerShape(18.dp)) {
             Text(error, Modifier.fillMaxWidth().padding(14.dp), color = colors.onErrorContainer, style = MaterialTheme.typography.bodySmall)
         } }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+            if (tab == 3) item { api?.let { LyricsBatchPanel(it) } }
             if (tab == 0) {
                 val system = state.system
                 if (system == null) item { DashboardEmpty("Ждём данные сервера", "Статистика появится после подключения серверного дополнения.") }

@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.delay
 import ru.dedseckms.music.data.*
 import java.io.File
 
@@ -32,32 +34,50 @@ import java.io.File
     LaunchedEffect(list) { snapshotFlow { list.canScrollBackward }.collect { onScrolled(it) } }
     val dragged by list.interactionSource.collectIsDraggedAsState()
     var follow by remember(song.id) { mutableStateOf(true) }
+    var timingDialog by remember(song.id) { mutableStateOf(false) }
+    var viewportHeight by remember { mutableIntStateOf(0) }
     var offset by remember(song.id, lyrics?.revision, lyrics?.timingOffsetMs) { mutableLongStateOf(lyrics?.timingOffsetMs ?: 0L) }
     val active = lyrics?.activeLine(position + offset) ?: -1
-    LaunchedEffect(dragged) { if (dragged) follow = false }
-    LaunchedEffect(active, follow) { if (follow && active >= 0) list.animateScrollToItem((active - 1).coerceAtLeast(0)) }
+    LaunchedEffect(dragged) {
+        if (dragged) follow = false
+        else { delay(3500); follow = true }
+    }
+    LaunchedEffect(active, follow, viewportHeight) {
+        if (follow && active >= 0 && viewportHeight > 0) {
+            val height = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == active }?.size ?: viewportHeight
+            list.animateScrollToItem(active, -((viewportHeight - height).coerceAtLeast(0) / 2))
+        }
+    }
+    if (timingDialog && lyrics?.canEditTiming == true) AlertDialog(
+        onDismissRequest = { if (!state.savingTiming) timingDialog = false },
+        title = { Text("Синхронизация текста") },
+        text = { Column {
+            Text("Поправка применяется всем слушателям. Положительный сдвиг показывает строку раньше.")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ offset = (offset - 250).coerceAtLeast(-10000) }, enabled = !state.savingTiming) { Text("−0,25 с") }
+                Text("${offset} мс", style = MaterialTheme.typography.labelMedium)
+                TextButton({ offset = (offset + 250).coerceAtMost(10000) }, enabled = !state.savingTiming) { Text("+0,25 с") }
+            }
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        } },
+        confirmButton = { TextButton({ session.saveTiming(offset) }, enabled = !state.loading && !state.savingTiming && offset != lyrics.timingOffsetMs) {
+            Text(if (state.savingTiming) "Сохраняем…" else if (offset == lyrics.timingOffsetMs) "Сохранено" else "Сохранить для всех")
+        } },
+        dismissButton = { TextButton({ timingDialog = false }, enabled = !state.savingTiming) { Text("Готово") } }
+    )
     Surface(shape = MaterialTheme.shapes.extraLarge, color = androidx.compose.ui.graphics.Color.Transparent) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (lyrics?.synced == true) "В такт музыке" else "Текст песни", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!follow) IconButton({ follow = true }) { Icon(Icons.Rounded.MyLocation, "К текущей строке") }
+                if (lyrics?.canEditTiming == true) IconButton({ timingDialog = true }) { Icon(Icons.Rounded.Tune, "Синхронизация текста") }
                 IconButton(session::refresh, enabled = !state.savingTiming) { Icon(Icons.Rounded.Refresh, "Обновить текст") }
             }
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
             state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 8.dp)) }
-            if (lyrics?.synced == true && lyrics.canEditTiming) Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ offset = (offset - 250).coerceAtLeast(-10000) }, enabled = !state.savingTiming) { Text("−0,25 с") }
-                Text("${offset} мс", style = MaterialTheme.typography.labelSmall)
-                TextButton({ offset = (offset + 250).coerceAtMost(10000) }, enabled = !state.savingTiming) { Text("+0,25 с") }
-            }
-            if (lyrics?.synced == true) Row(verticalAlignment = Alignment.CenterVertically) {
-                if (lyrics.canEditTiming) TextButton({ session.saveTiming(offset) }, enabled = !state.loading && !state.savingTiming && offset != lyrics.timingOffsetMs) {
-                    Text(if (state.savingTiming) "Сохраняем…" else if (offset == lyrics.timingOffsetMs) "Сохранено на сервере" else "Сохранить для всех")
-                } else Text("Синхронизация владельца · ${offset} мс", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                if (!follow) TextButton({ follow = true }) { Text("К строке") }
-            }
             if (lyrics != null && lyrics.lines.isNotEmpty()) {
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().onSizeChanged { viewportHeight = it.height }, state = list,
+                    contentPadding = PaddingValues(top = 16.dp, bottom = with(androidx.compose.ui.platform.LocalDensity.current) { (viewportHeight / 2).toDp() }.coerceAtLeast(24.dp)), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     itemsIndexed(lyrics.lines) { index, line ->
                         val highlighted = !lyrics.synced || index == active
                         val color by animateColorAsState(if (highlighted) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .65f), tween(350), label = "lyric-color")

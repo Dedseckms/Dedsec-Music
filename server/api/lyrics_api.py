@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 
 import profile_api as profile
+from lyrics_batch import Batch
 
 MAX_BODY=256*1024
 MAX_TEXT=128*1024
@@ -158,7 +159,7 @@ def native_lyrics(identity,song):
         raise
 
 
-def external_lyrics(song):
+def external_lyrics(song,pace=.25):
     if not all(song.get(k) and len(song[k])<=512 for k in ('title','artist')) or len(song.get('album',''))>512 or not 1<=song['duration']<=3600:return response('not_found')
     headers={'User-Agent':'DedSecMusic/1 (self-hosted lyrics)','Accept':'application/json'}
     if song.get('album'):
@@ -169,7 +170,7 @@ def external_lyrics(song):
             if value['status']!='not_found':return value
         except urllib.error.HTTPError as error:
             if error.code!=404:raise
-        time.sleep(.25)
+        time.sleep(pace)
     query=urllib.parse.urlencode({'track_name':song['title'],'artist_name':song['artist']})
     request=urllib.request.Request(LRCLIB+'/search?'+query,headers=headers)
     try:return search_result(bounded_json(EXTERNAL,request),song)
@@ -179,9 +180,10 @@ def external_lyrics(song):
 
 
 class Manager:
-    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics,protected_owner=None):
+    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics,protected_owner=None,background_guard=None):
         self.protected_owner=protected_owner or os.environ.get('MUSIC_PROTECTED_OWNER_ID') or None
         if self.protected_owner is not None and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',self.protected_owner):raise ValueError('Invalid protected owner ID')
+        self.background_guard=background_guard
         self.catalog=catalog;self.guard=guard or (lambda identity:None);self.native=native;self.external=external
         self.folder=Path(state)/'lyrics';self.folder.mkdir(mode=0o700,parents=True,exist_ok=True)
         if self.folder.resolve()!=self.folder or self.folder.is_symlink():raise ValueError('Physical lyrics cache required')
@@ -191,8 +193,17 @@ class Manager:
         self.external_retry=0
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY,value TEXT NOT NULL,expires REAL NOT NULL,updated REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS cache_size(id INTEGER PRIMARY KEY CHECK(id=1),items INTEGER NOT NULL,bytes INTEGER NOT NULL)')
+            db.execute('INSERT OR IGNORE INTO cache_size SELECT 1,count(*),coalesce(sum(length(CAST(value AS BLOB))),0) FROM cache')
+            db.executescript('''CREATE TRIGGER IF NOT EXISTS cache_insert AFTER INSERT ON cache BEGIN
+              UPDATE cache_size SET items=items+1,bytes=bytes+length(CAST(new.value AS BLOB)) WHERE id=1; END;
+              CREATE TRIGGER IF NOT EXISTS cache_delete AFTER DELETE ON cache BEGIN
+              UPDATE cache_size SET items=items-1,bytes=bytes-length(CAST(old.value AS BLOB)) WHERE id=1; END;
+              CREATE TRIGGER IF NOT EXISTS cache_update AFTER UPDATE OF value ON cache BEGIN
+              UPDATE cache_size SET bytes=bytes+length(CAST(new.value AS BLOB))-length(CAST(old.value AS BLOB)) WHERE id=1; END;''')
             db.execute('CREATE TABLE IF NOT EXISTS timing(song TEXT PRIMARY KEY,version TEXT NOT NULL,revision TEXT NOT NULL,offset_ms INTEGER NOT NULL,updated REAL NOT NULL)')
         self.path.chmod(0o600);self.file_lock=None
+        self.batch=Batch(self)
         if start:
             import fcntl
             import stat
@@ -266,6 +277,9 @@ class Manager:
                 db.execute('INSERT OR REPLACE INTO timing VALUES(?,?,?,?,?)',(key,version,revision,offset,time.time()))
             return self.decorate(identity,key,version,value)
 
+    def fetch_external(self,song,background=False):
+        return external_lyrics(song,pace=2 if background else .25) if self.external is external_lyrics else self.external(song)
+
     def process(self,item):
         identity,song,key,queued=item
         try:
@@ -274,7 +288,9 @@ class Manager:
             _,current=self.song(identity['id'],song['id'])
             if current!=key:return
             value=self.native(identity,song)
-            if value is None:value=response('error') if time.time()<self.external_retry else self.external(song)
+            if value is None:
+                value=response('error') if time.time()<self.external_retry else self.fetch_external(song)
+                self.batch.defer(2)
             self.guard(identity)
             _,current=self.song(identity['id'],song['id'])
             if current!=key:return
@@ -287,22 +303,30 @@ class Manager:
                     delay=max(1,delay)
                 except (ValueError,TypeError,OverflowError):delay=60
                 self.external_retry=time.time()+delay
+                self.batch.defer(delay,provider=True)
             value=response('error')
         except profile.ProfileError:return
         except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):value=response('error')
         finally:
             identity.clear()
         with self.db() as db:
-            stamp=time.time();db.execute('INSERT OR REPLACE INTO cache VALUES(?,?,?,?)',(key,json.dumps(value,separators=(',',':')),stamp+TTL[value['status']],stamp))
-            while True:
-                count,size=db.execute('SELECT count(*),coalesce(sum(length(value)),0) FROM cache').fetchone()
-                if count<=2048 and size<=64*2**20:break
-                db.execute('DELETE FROM cache WHERE key=(SELECT key FROM cache ORDER BY updated LIMIT 1)')
+            stamp=time.time();db.execute('INSERT INTO cache VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires=excluded.expires,updated=excluded.updated',(key,json.dumps(value,separators=(',',':')),stamp+TTL[value['status']],stamp))
+            self.prune(db)
+
+    def prune(self,db):
+        # Shared batch results need room beyond the small original lazy LRU cache.
+        while True:
+            count,size=db.execute('SELECT items,bytes FROM cache_size WHERE id=1').fetchone()
+            if count<=100000 and size<=512*2**20:break
+            db.execute('DELETE FROM cache WHERE key=(SELECT key FROM cache ORDER BY updated LIMIT 1)')
 
     def loop(self):
         while not self.stop.is_set():
             try:item=self.work.get(timeout=.5)
-            except queue.Empty:continue
+            except queue.Empty:
+                try:self.batch.step()
+                except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):pass
+                continue
             try:self.process(item)
             except (OSError,ValueError,sqlite3.Error):pass
             finally:

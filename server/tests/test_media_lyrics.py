@@ -30,6 +30,8 @@ class LyricsTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(db)) as d:
             d.executescript('''CREATE TABLE media_file(id TEXT,library_id INTEGER,path TEXT,title TEXT,artist TEXT,album TEXT,duration REAL,updated_at TEXT,missing INTEGER);
               CREATE TABLE user_library(user_id TEXT,library_id INTEGER);
+              CREATE TABLE user(id TEXT,user_name TEXT,is_admin INTEGER);
+              INSERT INTO user VALUES('owner','Fixture',1);
               INSERT INTO media_file VALUES('song',1,'song.mp3','A Song (Live)','An Artist','An Album',180,'version1',0);
               INSERT INTO user_library VALUES('owner',1);''')
         manager=lyrics.Manager(root/'state',Catalog(db,{'1':library}),start=False,native=native or Mock(return_value=None),

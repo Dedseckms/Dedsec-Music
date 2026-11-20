@@ -116,6 +116,19 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
             JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 524288), Charsets.UTF_8))
         }
     }
+    fun lyricsBatch(action: String? = null): LyricsBatchProgress {
+        require(action == null || action in setOf("start", "pause"))
+        return authorized { jwt -> request("lyrics-batch", jwt).apply {
+            if (action != null) post(JSONObject().put("action", action).toString().toRequestBody("application/json".toMediaType()))
+        }.build() }.use {
+            if (!it.isSuccessful) throw IOException(when (it.code) {
+                403 -> "Прогресс поиска текстов доступен только владельцу сервера"
+                404, 405 -> "Для поиска всей библиотеки нужно обновить сервер"
+                else -> "Не удалось получить прогресс поиска текстов"
+            })
+            LyricsBatchProgress.parse(JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)))
+        }
+    }
     fun upload(filename: String, length: Long, open: () -> InputStream, progress: (Long, Long) -> Unit) {
         val safe = UploadApi.safeFilename(filename); UploadPolicy.checkBytes(length)
         // Upload bodies cannot be retried after publication: a failed response is reported for explicit recovery.
