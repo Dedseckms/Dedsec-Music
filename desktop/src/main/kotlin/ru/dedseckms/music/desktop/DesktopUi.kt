@@ -98,10 +98,10 @@ private val LocalSample = staticCompositionLocalOf { false }
 
 @Composable private fun Workspace(c: DesktopController, s: DesktopState, audio: AudioState) {
     var add by remember { mutableStateOf<Song?>(null) }; var create by remember { mutableStateOf(false) }; var queueVisible by remember { mutableStateOf(true) }; var compactQueue by remember { mutableStateOf(false) }; var compact by remember { mutableStateOf(false) }
-    var remove by remember { mutableStateOf<Pair<DesktopPage, Int>?>(null) }; var waveSettings by remember { mutableStateOf(false) }
+    var remove by remember { mutableStateOf<Pair<DesktopPage, Int>?>(null) }; var waveSettings by remember { mutableStateOf(false) }; var lyricsVisible by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(s.message) { s.message?.let { snack.showSnackbar(it); c.notice(null) } }
-    Scaffold(containerColor = Color.Transparent, snackbarHost = { SnackbarHost(snack) }, bottomBar = { BottomPlayer(c, s, audio, { add = it }, { if (compact) compactQueue = true else queueVisible = !queueVisible }) }) { padding ->
+    Scaffold(containerColor = Color.Transparent, snackbarHost = { SnackbarHost(snack) }, bottomBar = { BottomPlayer(c, s, audio, { add = it }, { if (compact) compactQueue = true else queueVisible = !queueVisible }, lyricsVisible, { lyricsVisible = !lyricsVisible }) }) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
             Sidebar(c, s, { create = true })
             BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
@@ -109,6 +109,9 @@ private val LocalSample = staticCompositionLocalOf { false }
                 SideEffect { compact = !wide }
                 Row(Modifier.fillMaxSize().padding(top = 14.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Column(Modifier.weight(1f).fillMaxHeight().glassPanel(Rounded, MaterialTheme.colorScheme.surfaceContainerLow)) {
+                        if (lyricsVisible && s.now != null) {
+                            LyricsPlayer(c, s.now, audio.position) { lyricsVisible = false }
+                        } else {
                         Header(c, s)
                         if (s.busy || s.searching) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp)) else Spacer(Modifier.height(2.dp))
                         if (s.downloadIds.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
@@ -127,8 +130,9 @@ private val LocalSample = staticCompositionLocalOf { false }
                             s.tab == "Добавить" -> Upload(c, s)
                             else -> Library(c, s, songs, source, { add = it }, { create = true })
                         }
+                        }
                     }
-                    if (wide && queueVisible) QueuePanel(c, s, Modifier.width(278.dp))
+                    if (wide && queueVisible && !lyricsVisible) QueuePanel(c, s, Modifier.width(278.dp))
                 }
             }
         }
@@ -285,19 +289,18 @@ private val LocalSample = staticCompositionLocalOf { false }
         LazyColumn(Modifier.padding(top = 12.dp)) { itemsIndexed(s.queue.drop(s.cursor + 1).take(15), key = { i, song -> "$i:${song.id}" }) { index, next -> Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { c.select(s.cursor + index + 1) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Cover(next.coverArt, next.album, Modifier.size(35.dp), 8); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(next.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp); Text(next.artist, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } } } }
     }
 }
-@Composable private fun BottomPlayer(c: DesktopController, s: DesktopState, audio: AudioState, add: (Song) -> Unit, queue: () -> Unit) {
-    var lyrics by remember { mutableStateOf(false) }
-    if (lyrics) s.now?.let { song -> key(s.username, song.id) { LyricsDialog(song, audio.position, c.lyricsApi(), c.lyricsCache(song), c.audio::seek) { lyrics = false } } }
+@Composable private fun BottomPlayer(c: DesktopController, s: DesktopState, audio: AudioState, add: (Song) -> Unit, queue: () -> Unit, lyricsVisible: Boolean, lyrics: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Row(Modifier.fillMaxWidth().height(112.dp).padding(horizontal = 28.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(28.dp)) {
             Row(Modifier.width(250.dp), verticalAlignment = Alignment.CenterVertically) { Cover(s.now?.coverArt.orEmpty(), s.now?.album ?: "DedSec", Modifier.size(58.dp), 16); Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(s.now?.title ?: "Поймай свой ритм", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Text(s.now?.artist ?: "Выбери трек для воспроизведения", maxLines = 1, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!s.wave) IconButton(c::shuffle, enabled = s.now != null) { Icon(Icons.Rounded.Shuffle, "Перемешать", Modifier.size(19.dp), tint = if (s.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                    else Spacer(Modifier.size(48.dp))
                     IconButton({ c.skip(false) }, enabled = s.now != null) { Icon(Icons.Rounded.SkipPrevious, "Назад", Modifier.size(28.dp)) }
                     FilledIconButton(c::toggle, enabled = s.now != null, modifier = Modifier.size(46.dp), shape = RoundedCornerShape(18.dp)) { if (audio.buffering) CircularProgressIndicator(Modifier.size(23.dp), strokeWidth = 2.dp) else Icon(if (audio.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", Modifier.size(30.dp)) }
                     IconButton({ c.skip(true) }, enabled = s.now != null) { Icon(Icons.Rounded.SkipNext, "Далее", Modifier.size(28.dp)) }
-                    IconButton(c::repeat, enabled = s.now != null) { Icon(if (s.wave) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, if (s.wave) "Повторять один трек" else "Повтор очереди", Modifier.size(19.dp), tint = if (if (s.wave) s.repeatOne else s.repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                    IconButton(c::repeat, enabled = s.now != null) { Icon(if (s.repeatOne || s.wave) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, when { s.repeatOne -> "Повтор одного трека"; s.repeat -> "Повтор всей очереди"; else -> "Повтор выключен" }, Modifier.size(19.dp), tint = if (s.repeatOne || s.repeat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val duration = audio.duration.takeIf { it > 0 } ?: (s.now?.duration ?: 0) * 1000L
@@ -310,7 +313,7 @@ private val LocalSample = staticCompositionLocalOf { false }
             }
             Column(Modifier.width(252.dp), horizontalAlignment = Alignment.End) {
                 Text(s.source, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) { IconButton({ s.now?.let(add) }, enabled = s.now != null) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", Modifier.size(20.dp)) }; IconButton({ lyrics = true }, enabled = s.now != null) { Icon(Icons.Rounded.Lyrics, "Текст песни", Modifier.size(20.dp)) }; IconButton(queue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.size(20.dp)) }; Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, Modifier.size(17.dp)); var volume by remember { mutableFloatStateOf(.8f) }; Slider(volume, { volume = it; c.audio.volume(it) }, Modifier.width(80.dp)) }
+                Row(verticalAlignment = Alignment.CenterVertically) { IconButton({ s.now?.let(add) }, enabled = s.now != null) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", Modifier.size(20.dp)) }; IconButton(lyrics, enabled = s.now != null) { Icon(Icons.Rounded.Lyrics, "Текст песни", Modifier.size(20.dp), tint = if (lyricsVisible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }; IconButton(queue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.size(20.dp)) }; Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, Modifier.size(17.dp)); var volume by remember { mutableFloatStateOf(.8f) }; Slider(volume, { volume = it; c.audio.volume(it) }, Modifier.width(80.dp)) }
             }
         }
     }

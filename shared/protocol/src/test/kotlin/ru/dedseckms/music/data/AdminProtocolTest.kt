@@ -8,6 +8,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AdminProtocolTest {
+    @Test fun roleChangesUseAuthenticatedFixedEndpointAndOlderServersDoNotOfferThem() {
+        assertFalse(AdminUser.parse(JSONObject("""{"id":"u","username":"friend"}""")).canChangeRole)
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"token":"admin-test"}"""))
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).adminSetRole("friend-id", true)
+            server.takeRequest()
+            val change = server.takeRequest()
+            assertEquals("POST", change.method)
+            assertEquals("/dedsec/profile/v1/admin/users/friend-id/role", change.path)
+            assertEquals("Bearer admin-test", change.getHeader("Authorization"))
+            assertTrue(JSONObject(change.body.readUtf8()).getBoolean("isAdmin"))
+            assertThrows(IllegalArgumentException::class.java) { api(server).adminSetRole("../owner", true) }
+            assertEquals(2, server.requestCount)
+        }
+    }
     private fun api(server: MockWebServer) = ProfileApi(Credentials(server.url("/").toString(), "owner", "login-password"), allowLocalHttpForTests = true)
     @Test fun credentialsOnlyTravelInAuthenticatedCreateBodyAndUploadsArePaged() {
         MockWebServer().use { server ->

@@ -26,7 +26,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "DedSec Music"
-            packageVersion = "0.4.1"
+            packageVersion = "0.4.2"
             description = "Your library. Your rhythm."
             vendor = "Dedseckms"
             copyright = "Copyright 2026 Dedseckms"
@@ -60,5 +60,14 @@ tasks.register<JavaExec>("renderDashboard") {
     mainClass.set("ru.dedseckms.music.desktop.MainKt")
     workingDir = rootProject.projectDir
     args("--render-dashboard=" + rootProject.file(".private/dashboard-preview").absolutePath)
+    maxHeapSize = "512m"
+}
+
+tasks.register<JavaExec>("renderLyrics") {
+    dependsOn("classes")
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("ru.dedseckms.music.desktop.MainKt")
+    workingDir = rootProject.projectDir
+    args("--render-lyrics=" + rootProject.file(".private/lyrics-preview").absolutePath)
     maxHeapSize = "512m"
 }

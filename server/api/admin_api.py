@@ -42,10 +42,12 @@ def native(token, path, method='GET', payload=None):
 
 
 class Accounts:
-    def __init__(self, state, database, library, imports=None, legacy=None, cancel=None, legacy_guard=None):
+    def __init__(self, state, database, library, imports=None, legacy=None, cancel=None, legacy_guard=None, protected_owner=None):
         self.state, self.database, self.library = Path(state), Path(database), Path(library)
         self.imports, self.legacy, self.cancel = Path(imports) if imports else None, legacy or (lambda _: False), cancel
         self.legacy_guard = legacy_guard or (lambda: False)
+        self.protected_owner = protected_owner or os.environ.get('MUSIC_PROTECTED_OWNER_ID') or None
+        if self.protected_owner is not None and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', self.protected_owner):raise ValueError('Invalid protected owner ID')
         self.folder = self.state / 'accounts'
         self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.folder.resolve() != self.folder or self.folder.is_symlink(): raise ValueError('Physical account state required')
@@ -101,8 +103,9 @@ class Accounts:
 
     def dto(self, user, own, admins):
         return {'id': user['id'], 'username': user['userName'], 'isAdmin': user.get('isAdmin') is True,
+                'canChangeRole': user['id'] not in (own,self.protected_owner) and not (user.get('isAdmin') is True and admins <= 1),
                 'uploadCount': self.uploads(user['id'], 0, 0)['total'],
-                'canDelete': user['id'] != own and not (user.get('isAdmin') is True and admins <= 1)
+                'canDelete': user['id'] not in (own,self.protected_owner) and not (user.get('isAdmin') is True and admins <= 1)
                     and (not self.legacy(user['userName']) or self.legacy_guard())}
 
     def uploads(self, uid, offset, limit):
@@ -172,15 +175,52 @@ class Accounts:
             raise
         return {'user': self.dto(current, identity['id'], 1), 'uploadReady': True, 'warning': None}
 
+    def role(self, identity, uid, data):
+        if set(data) != {'isAdmin'} or type(data['isAdmin']) is not bool:
+            raise AdminError(400, 'INVALID_REQUEST')
+        current = self.identity(identity)
+        if current.get('isAdmin') is not True: raise AdminError(403, 'ADMIN_REQUIRED')
+        rows = self.users(identity['token']); user = next((r for r in rows if r['id'] == uid), None)
+        if user is None: raise AdminError(404, 'USER_NOT_FOUND')
+        if uid == identity['id']: raise AdminError(409, 'SELF_ROLE_FORBIDDEN')
+        if uid == self.protected_owner: raise AdminError(409, 'OWNER_PROTECTED')
+        admins = sum(row.get('isAdmin') is True for row in rows)
+        if not data['isAdmin'] and user.get('isAdmin') is True and admins <= 1:
+            raise AdminError(409, 'LAST_ADMIN_FORBIDDEN')
+        if user.get('isAdmin') is not data['isAdmin']:
+            # Native PUT saves the full editable record; retain public metadata, never credentials.
+            before = native(identity['token'], '/api/user/' + uid)
+            if before.get('id') != uid or before.get('isAdmin') is not user.get('isAdmin'):
+                raise AdminError(409, 'ACCOUNT_CHANGED')
+            fields = ('id', 'userName', 'name', 'email', 'lastLoginAt', 'lastAccessAt', 'createdAt', 'updatedAt', 'scrobbleFilter')
+            payload = {key: before[key] for key in fields if key in before}
+            payload['isAdmin'] = data['isAdmin']
+            self.backup()
+            if self.identity(identity).get('isAdmin') is not True: raise AdminError(403, 'ADMIN_REQUIRED')
+            latest = native(identity['token'], '/api/user/' + uid)
+            if any(latest.get(key) != before.get(key) for key in (*fields, 'isAdmin', 'libraries')):
+                raise AdminError(409, 'ACCOUNT_CHANGED')
+            native(identity['token'], '/api/user/' + uid, 'PUT', payload)
+            confirmed = native(identity['token'], '/api/user/' + uid)
+            if confirmed.get('id') != uid or confirmed.get('isAdmin') is not data['isAdmin'] or any(
+                    confirmed.get(key) != before.get(key) for key in ('userName', 'name', 'email', 'scrobbleFilter')):
+                raise AdminError(503, 'ROLE_UNCONFIRMED')
+            admins += 1 if data['isAdmin'] else -1
+            user = confirmed
+        return {'user': self.dto(user, identity['id'], admins), 'ok': True}
+
     def delete(self, identity, uid):
+        if self.identity(identity).get('isAdmin') is not True: raise AdminError(403, 'ADMIN_REQUIRED')
         rows = self.users(identity['token']); user = next((r for r in rows if r['id'] == uid), None)
         if uid == identity['id']: raise AdminError(409, 'SELF_DELETE_FORBIDDEN')
+        if uid == self.protected_owner: raise AdminError(409, 'OWNER_PROTECTED')
         if user is None: raise AdminError(404, 'USER_NOT_FOUND')
         if user.get('isAdmin') is True and sum(r.get('isAdmin') is True for r in rows) <= 1:
             raise AdminError(409, 'LAST_ADMIN_FORBIDDEN')
         quantum_uid = self.legacy(user['userName'])
         if quantum_uid and not self.legacy_guard(): raise AdminError(503, 'UPLOAD_REVOCATION_UNAVAILABLE')
         self.backup()
+        if self.identity(identity).get('isAdmin') is not True: raise AdminError(403, 'ADMIN_REQUIRED')
         with self.db() as db:
             db.execute('INSERT OR IGNORE INTO tombstones(name,uid,created,quantum_uid) VALUES(?,?,?,?)',
                        (user['userName'].casefold(), uid, iso(time.time()), str(quantum_uid) if quantum_uid else None))
@@ -235,14 +275,15 @@ def dispatch(handler, chunks):
         elif handler.command in ('POST', 'DELETE') and not query:
             if not LOCK.acquire(blocking=False): raise AdminError(429, 'ACCOUNT_BUSY')
             try:
-                if handler.command == 'POST' and route == '/users':
+                if handler.command == 'POST' and (route == '/users' or re.fullmatch(r'/users/[A-Za-z0-9_-]{1,80}/role', route)):
                     raw = bytearray()
                     for block in chunks(handler.rfile, handler.headers):
                         raw.extend(block)
                         if len(raw) > 16384: raise AdminError(413, 'INVALID_REQUEST')
-                    data = json.loads(raw)
+                    try: data = json.loads(raw)
+                    except (ValueError, UnicodeError): raise AdminError(400, 'INVALID_REQUEST') from None
                     if not isinstance(data, dict): raise AdminError(400, 'INVALID_REQUEST')
-                    value = SERVICE.create(identity, data)
+                    value = SERVICE.create(identity, data) if route == '/users' else SERVICE.role(identity, route.split('/')[2], data)
                 elif handler.command == 'DELETE' and re.fullmatch(r'/users/[A-Za-z0-9_-]{1,80}', route):
                     value = SERVICE.delete(identity, route.split('/')[2])
                 else: raise AdminError(405, 'METHOD_NOT_ALLOWED')

@@ -5,7 +5,12 @@
 проверяет роль через Navidrome; обычный аккаунт получает 403.
 
 * `GET /dedsec/profile/v1/admin/me` → `{isAdmin:true}`.
-* `GET .../admin/users` → `{users:[{id,username,isAdmin,uploadCount,canDelete}]}`.
+* `GET .../admin/users` → `{users:[{id,username,isAdmin,uploadCount,canDelete,canChangeRole}]}`.
+* `POST .../admin/users/{id}/role` с `{isAdmin:boolean}` → `{user,ok:true}`.
+  Собственную роль менять нельзя; понижение последнего администратора запрещено.
+  Роль проверяется повторно внутри операции. Ответ подтверждается чтением Navidrome;
+  пароль, имя, email, фильтр скробблинга и библиотеки сохраняются. Старый JWT
+  пониженного администратора больше не открывает admin API благодаря свежей проверке роли.
 * `GET .../admin/users/{id}/uploads?offset=0&limit=50` → `{items,total}`.
   Элемент: `{name,source:"upload"|"yandex",size,createdAt}`; `limit` 1–100.
 * `POST .../admin/users` с `{username,password}` → `{user,uploadReady,warning}`.
@@ -33,3 +38,13 @@
 Адаптер другого загрузчика обязан гарантировать отзыв всех его способов чтения
 и записи. До включения такой защиты `canDelete=false` и ошибка
 `UPLOAD_REVOCATION_UNAVAILABLE` запрещают частичное удаление аккаунта.
+
+Защита первоначального владельца задаётся явно: `MUSIC_PROTECTED_OWNER_ID`
+или аргумент `Accounts(..., protected_owner=...)`. Значение — подтверждённый
+native UID владельца; порядок списка пользователей для определения владельца
+не используется. Для защищённого аккаунта `canDelete=false`, `canChangeRole=false`,
+попытка изменения другим администратором получает `409 OWNER_PROTECTED`.
+Без настройки действуют запреты самоизменения и последнего администратора;
+неизменяемость первоначального владельца в таком режиме не гарантируется.
+Перед удалением, после резервного копирования, роль инициатора проверяется
+ещё раз: отзыв административных прав прерывает операцию до tombstone.
