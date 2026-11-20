@@ -47,4 +47,33 @@ class NextVersionTest {
     @Test fun theGlassShaderCompilesOnSupportedAndroidVersions() {
         if (Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(ru.dedseckms.music.ui.GLASS_SHADER)
     }
+    @Test fun accountQueuesResolveOnThePlayersThreadForMusicAndWave() {
+        val app = compose.activity.application as MusicApp
+        val previous = app.credentials.active()
+        val credentials = ru.dedseckms.music.data.Credentials("https://queue-test.invalid", "queue-test", "fixture-password")
+        app.credentials.save(credentials)
+        lateinit var connection: com.google.common.util.concurrent.ListenableFuture<androidx.media3.session.MediaController>
+        compose.runOnUiThread {
+            val token = androidx.media3.session.SessionToken(compose.activity,
+                android.content.ComponentName(compose.activity, ru.dedseckms.music.playback.MusicService::class.java))
+            connection = androidx.media3.session.MediaController.Builder(compose.activity, token).buildAsync()
+        }
+        val controller = connection.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        try {
+            val songs = (0..39).map { ru.dedseckms.music.data.Song("fixture-$it", "Track $it", "Artist") }
+            for (wave in listOf(false, true, false)) {
+                val request = app.playRequests.offer(credentials.accountId, songs, 0, wave, ru.dedseckms.music.data.MixMode.BALANCED)
+                compose.runOnUiThread { controller.setMediaItem(MediaItem.Builder().setMediaId("queue:$request").build()) }
+                compose.waitUntil(10_000) {
+                    var resolved = false
+                    compose.runOnUiThread { resolved = controller.mediaItemCount == 40 && controller.currentMediaItem?.mediaId == "fixture-0" }
+                    resolved
+                }
+            }
+        } finally {
+            compose.runOnUiThread { controller.stop(); controller.clearMediaItems(); controller.release() }
+            app.credentials.logout()
+            previous?.let(app.credentials::save)
+        }
+    }
 }

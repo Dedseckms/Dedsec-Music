@@ -307,13 +307,15 @@ class MusicService : MediaLibraryService() {
                 val account = app.credentials.activeId() ?: throw IOException("Войди в аккаунт")
                 val request = app.playRequests.take(reference.removePrefix("queue:"), account) ?: throw IOException("Очередь устарела")
                 val window = QueueWindow(request)
-                if (revision != playbackRevision) throw IOException("Выбран другой трек")
-                queueWindow = window; queueAccount = account
-                queueSource = request.source
-                mixActive = request.mix; currentMixMode = request.mode; currentMixMood = request.mood; mixAccount = if (request.mix) account else null
-                if (request.mix) player.shuffleModeEnabled = false
-                if (request.mix || player.repeatMode == Player.REPEAT_MODE_ONE) player.repeatMode = Player.REPEAT_MODE_OFF
-                MediaSession.MediaItemsWithStartPosition(window.initial.map { resolve(it, account) }, window.initialIndex, 0)
+                withContext(Dispatchers.Main.immediate) {
+                    if (revision != playbackRevision || account != app.credentials.activeId()) throw IOException("Выбран другой трек")
+                    queueWindow = window; queueAccount = account
+                    queueSource = request.source
+                    mixActive = request.mix; currentMixMode = request.mode; currentMixMood = request.mood; mixAccount = if (request.mix) account else null
+                    if (request.mix) player.shuffleModeEnabled = false
+                    if (request.mix || player.repeatMode == Player.REPEAT_MODE_ONE) player.repeatMode = Player.REPEAT_MODE_OFF
+                    MediaSession.MediaItemsWithStartPosition(window.initial.map { resolve(it, account) }, window.initialIndex, 0)
+                }
             }
         }
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
