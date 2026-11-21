@@ -34,15 +34,53 @@ class ChildModeTest {
         try {
             store.cacheSongs(listOf(song)); store.cacheFavorites(listOf(song)); store.record(song); store.queueDownload(song)
             store.audioFile(song.id).writeBytes(audio); store.downloaded(song, audio.size.toLong())
-            store.updateContentRating(song.id, ContentRating.CLEAN, true)
+            store.updateContentRating(song, ContentRating.CLEAN, true)
             val copies = store.cachedSongs() + store.cachedFavorites() + store.history().map { it.song } + store.pendingDownloads() + store.offline()
             assertEquals(5, copies.size)
             copies.forEach { assertEquals(ContentRating.CLEAN, it.contentRating); assertTrue(it.contentRatingOverride) }
             assertArrayEquals(audio, store.audioFile(song.id).readBytes())
-            store.updateContentRating(song.id, ContentRating.UNKNOWN, false)
+            store.updateContentRating(song, ContentRating.UNKNOWN, false)
             assertFalse(store.offline().single().contentRatingOverride)
             assertFalse(ContentPolicy.allowed(store.offline().single(), true))
             assertArrayEquals(audio, store.audioFile(song.id).readBytes())
+        } finally {
+            java.io.File(context.filesDir, "accounts/$account").deleteRecursively()
+            context.getSharedPreferences("account_$account", 0).edit().clear().commit()
+        }
+    }
+
+    @Test fun staleDownloadAndLibraryWritersCannotUndoCompletedRatingMutation() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val account = java.util.UUID.randomUUID().toString().replace("-", "")
+        val store = LocalStore(context, account)
+        val staleClean = Song("stale-download", "Test", "Artist", contentRating = ContentRating.CLEAN)
+        val audio = byteArrayOf(2, 4, 6, 8)
+        try {
+            store.childMode(false)
+            store.audioFile(staleClean.id).writeBytes(audio)
+            store.updateContentRating(staleClean, ContentRating.EXPLICIT, true)
+            // These are the real publication paths used by an already-running worker and older HTTP results.
+            store.downloaded(staleClean, audio.size.toLong())
+            store.cacheSongs(listOf(staleClean)); store.cacheFavorites(listOf(staleClean))
+            store.record(staleClean); store.queueDownload(staleClean)
+            val reloaded = LocalStore(context, account)
+            val copies = reloaded.offline() + reloaded.cachedSongs() + reloaded.cachedFavorites() +
+                reloaded.history().map { it.song } + reloaded.pendingDownloads()
+            assertEquals(5, copies.size)
+            copies.forEach { assertEquals(ContentRating.EXPLICIT, it.contentRating); assertTrue(it.contentRatingOverride) }
+            reloaded.childMode(true)
+            assertFalse(ContentPolicy.allowed(reloaded.offline().single(), reloaded.childMode()))
+            assertArrayEquals(audio, reloaded.audioFile(staleClean.id).readBytes())
+            reloaded.updateContentRating(staleClean, ContentRating.CLEAN, true)
+            val replacedRecording = staleClean.copy(size = 123456L, contentRating = ContentRating.UNKNOWN)
+            reloaded.cacheSongs(listOf(replacedRecording))
+            assertEquals(ContentRating.UNKNOWN, reloaded.cachedSongs().single().contentRating)
+            assertFalse(reloaded.cachedSongs().single().contentRatingOverride)
+            assertFalse(ContentPolicy.allowed(reloaded.cachedSongs().single(), true))
+            reloaded.updateContentRating(staleClean, ContentRating.UNKNOWN, false)
+            reloaded.downloaded(staleClean, audio.size.toLong())
+            assertEquals(ContentRating.UNKNOWN, reloaded.offline().single().contentRating)
+            assertFalse(reloaded.offline().single().contentRatingOverride)
         } finally {
             java.io.File(context.filesDir, "accounts/$account").deleteRecursively()
             context.getSharedPreferences("account_$account", 0).edit().clear().commit()

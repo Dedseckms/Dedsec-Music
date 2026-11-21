@@ -164,7 +164,7 @@ class MusicService : MediaLibraryService() {
         loudness?.release(); loudness = null; player.volume = 1f
         player.stop(); player.clearMediaItems()
     }
-    private fun allowed(song: Song): Boolean = ContentPolicy.allowed(song, app.local()?.childMode() ?: false)
+    private fun allowed(song: Song): Boolean = ContentPolicy.allowed(app.local()?.contentRatedSong(song) ?: song, app.local()?.childMode() ?: false)
     private fun playable(songs: List<Song>): List<Song> = songs.filter(::allowed)
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
@@ -205,7 +205,8 @@ class MusicService : MediaLibraryService() {
     private fun browsable(id: String, title: String, subtitle: String = "") = MediaItem.Builder().setMediaId(id)
         .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsBrowsable(true).setIsPlayable(false).build()).build()
 
-    private fun resolve(song: Song, accountId: String): MediaItem {
+    private fun resolve(rawSong: Song, accountId: String): MediaItem {
+        val song = LocalStore(this, accountId).contentRatedSong(rawSong)
         if (!allowed(song)) throw IOException(ContentPolicy.BLOCKED_MESSAGE)
         app.playbackSongs["$accountId:${song.id}"] = song
         return item(song, mixActive, currentMixMode, currentMixMood, queueSource).buildUpon().setUri(Uri.Builder().scheme("dedsec").authority(accountId).appendPath(song.id).build())
@@ -333,7 +334,7 @@ class MusicService : MediaLibraryService() {
                             ?: entry.requestMetadata.searchQuery?.let { api.songs(it, count = 1).firstOrNull() }
                             ?: Song.parse(api.call("getSong", "id" to entry.mediaId).getJSONObject("song"))
                     }
-                    val selection = ContentPolicy.selection(songs, startIndex.coerceAtLeast(0), app.local()?.childMode() ?: false)
+                    val selection = ContentPolicy.selection(songs.map { app.local()?.contentRatedSong(it) ?: it }, startIndex.coerceAtLeast(0), app.local()?.childMode() ?: false)
                         ?: throw IOException(ContentPolicy.BLOCKED_MESSAGE)
                     withContext(Dispatchers.Main.immediate) {
                         if (revision != playbackRevision || account != app.credentials.activeId()) throw IOException("Очередь устарела")
@@ -347,7 +348,8 @@ class MusicService : MediaLibraryService() {
             return background {
                 val account = app.credentials.activeId() ?: throw IOException("Войди в аккаунт")
                 val request = app.playRequests.take(reference.removePrefix("queue:"), account) ?: throw IOException("Очередь устарела")
-                val selection = ContentPolicy.selection(request.songs, request.selected, LocalStore(this@MusicService, account).childMode())
+                val store = LocalStore(this@MusicService, account)
+                val selection = ContentPolicy.selection(request.songs.map(store::contentRatedSong), request.selected, store.childMode())
                     ?: throw IOException(ContentPolicy.BLOCKED_MESSAGE)
                 val window = QueueWindow(request.copy(songs = selection.songs, selected = selection.index))
                 withContext(Dispatchers.Main.immediate) {
