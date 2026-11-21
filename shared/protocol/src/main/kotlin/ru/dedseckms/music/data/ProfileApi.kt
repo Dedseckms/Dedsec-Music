@@ -117,7 +117,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         }
     }
     fun lyricsBatch(action: String? = null): LyricsBatchProgress {
-        require(action == null || action in setOf("start", "pause"))
+        require(action == null || action in setOf("start", "pause", "align_start", "align_pause"))
         return authorized { jwt -> request("lyrics-batch", jwt).apply {
             if (action != null) post(JSONObject().put("action", action).toString().toRequestBody("application/json".toMediaType()))
         }.build() }.use {

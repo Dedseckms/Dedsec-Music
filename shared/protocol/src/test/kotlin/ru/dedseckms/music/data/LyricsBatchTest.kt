@@ -10,6 +10,22 @@ import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 class LyricsBatchTest {
+    @Test fun alignmentProgressIsOptionalAndControlsRemainOnOwnerEndpoint() {
+        MockWebServer().use { server ->
+            val stats = """{"total":10,"checked":7,"synced":3,"plain":1,"instrumental":1,"notFound":1,"errors":1,"pending":3,"running":true,"discovering":false}"""
+            assertNull(LyricsBatchProgress.parse(JSONObject(stats)).alignment)
+            val nested = JSONObject("""{"enabled":true,"total":4,"pending":1,"done":1,"skipped":1,"errors":0,"active":1}""")
+            server.enqueue(MockResponse().setBody("""{"token":"native-token"}"""))
+            server.enqueue(MockResponse().setBody(JSONObject(stats).put("alignment", nested).toString()))
+            val api = ProfileApi(Credentials(server.url("/").toString(), "owner", "secret"), allowLocalHttpForTests = true)
+            val alignment = api.lyricsBatch("align_start").alignment!!
+            assertTrue(alignment.enabled); assertEquals(1, alignment.active); assertEquals(1, alignment.skipped)
+            server.takeRequest(); val request = server.takeRequest()
+            assertEquals("/dedsec/profile/v1/lyrics-batch", request.path)
+            assertEquals("align_start", JSONObject(request.body.readUtf8()).getString("action"))
+            assertEquals("Bearer native-token", request.getHeader("Authorization"))
+        }
+    }
     @Test fun completingPollPreservesQueuedActionAndIgnoresDuplicateClick() = runBlocking {
         MockWebServer().use { server ->
             val stats = """{"total":10,"checked":0,"synced":0,"plain":0,"instrumental":0,"notFound":0,"errors":0,"pending":10,"running":false,"discovering":false}"""

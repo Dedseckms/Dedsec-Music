@@ -191,7 +191,7 @@ if __name__ == '__main__':
     SYSTEM=system_admin.configure(profile.BASE,LIBRARY,volumes=json.loads(os.environ.get('STORAGE_VOLUMES','[]')),slot=audio.UPLOAD,
                         nav_database=os.environ.get('NAV_DB_PATH','/nav-data/navidrome.db'),library_ids=json.loads(os.environ.get('RADIO_LIBRARY_MAP','{"1":"/storage/library"}')))
     if RADIO is None:raise RuntimeError('Read-only music catalogue required for lyrics')
-    LYRICS=lyrics_api.Manager(profile.BASE,RADIO.catalog,guard=media_api.guard,background_guard=media_api.guard)
+    LYRICS=lyrics_api.Manager(profile.BASE,RADIO.catalog,guard=media_api.guard,background_guard=media_api.guard,decode_slot=audio.UPLOAD)
     media_api.configure(upload,LYRICS)
     try:Server(('0.0.0.0', 8080), Handler).serve_forever(poll_interval=1)
     finally:
