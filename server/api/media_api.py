@@ -49,11 +49,14 @@ def configure(upload,lyrics):
 
 
 def owns(path):
-    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads',profile.PREFIX+'/lyrics-batch') or path.startswith(profile.PREFIX+'/lyrics/')
+    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads',profile.PREFIX+'/lyrics-batch') or path.startswith(profile.PREFIX+'/lyrics/') or path.startswith(profile.PREFIX+'/lyrics-align/worker/')
 
 
 def dispatch(handler,chunks):
     parsed=urllib.parse.urlsplit(handler.path)
+    if parsed.path.startswith(profile.PREFIX+'/lyrics-align/worker/'):
+        if LYRICS is None:profile.send(handler,503,{'error':'media_unavailable'});return 503
+        return LYRICS.alignment.dispatch(handler,chunks)
     try:
         identity=profile.authenticate(handler.headers);guard(identity)
         if UPLOAD is None or LYRICS is None:raise profile.ProfileError(503)

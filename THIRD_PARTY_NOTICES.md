@@ -55,3 +55,7 @@ The server kit references upstream container images and installs separately lice
 | FFmpeg / FFprobe | LGPL / GPL depending on distribution build | https://ffmpeg.org/legal.html |
 
 Original copyright and license files remain in installed packages and container images. Their authors are independent from this project. When redistributing binaries or images, retain the required notices and provide corresponding source where their licenses require it.
+
+## Optional lyrics alignment worker
+
+The separately installed worker uses sherpa-onnx (Apache-2.0, https://github.com/k2-fsa/sherpa-onnx) and the Russian MFA model and dictionary by Montreal Corpus Tools (CC BY 4.0, https://huggingface.co/MontrealCorpusTools/russian_mfa). The dictionary is converted to a runtime lexicon; the acoustic model is unchanged. These assets are not bundled with the application. Exact revisions and hashes are listed in server/LYRICS_ALIGNMENT.md. Retain original notices when installing or redistributing them.

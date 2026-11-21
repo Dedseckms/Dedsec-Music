@@ -34,6 +34,18 @@ import ru.dedseckms.music.data.*
                 Text(if (progress.running) "Приостановить" else if (progress.total == 0) "Начать поиск" else "Продолжить / проверить новые")
             }
         } else if (state.error == null) CircularProgressIndicator()
+        progress?.alignment?.let { alignment ->
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Автосинхронизация", style = MaterialTheme.typography.titleLarge)
+            Text(when { !alignment.enabled -> "Приостановлена"; alignment.active > 0 -> "Выравниваем текст по аудио…"; alignment.pending > 0 -> "Ожидаем обработку на втором сервере"; else -> "Ожидаем новые тексты без таймкодов" }, style = MaterialTheme.typography.bodyMedium)
+            val completed = alignment.done + alignment.skipped + alignment.errors
+            LinearProgressIndicator(progress = { if (alignment.total > 0) (completed.toFloat() / alignment.total).coerceIn(0f, 1f) else 0f }, modifier = Modifier.fillMaxWidth())
+            Text("Синхронизировано: ${alignment.done}\nВ очереди: ${alignment.pending} · обрабатывается: ${alignment.active}\nНе поддерживаются: ${alignment.skipped}\nОшибки: ${alignment.errors}", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton({ session.action(if (alignment.enabled) "align_pause" else "align_start") }, enabled = !state.acting) {
+                Text(if (alignment.enabled) "Приостановить выравнивание" else "Включить выравнивание")
+            }
+            Text("Обрабатывается только найденный текст без таймкодов. Неизвестные слова и неподдерживаемые записи пропускаются. Готовая синхронизация и поправки владельца сохраняются.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Text("Закрытие приложения не останавливает очередь. Отсутствующий текст и таймкоды не выдумываются.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

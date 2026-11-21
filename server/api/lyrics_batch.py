@@ -57,7 +57,7 @@ class Batch:
         return {'total':row[3],'checked':checked,'synced':counts.get('synced',0),'plain':counts.get('plain',0),
                 'instrumental':counts.get('instrumental',0),'notFound':counts.get('not_found',0),
                 'errors':counts.get('error',0),'pending':pending,'running':bool(row[1] and (row[2] or pending)),
-                'discovering':bool(row[2])}
+                'discovering':bool(row[2]),'alignment':self.manager.alignment.status()}
 
     def control(self,identity,action):
         self.authorize(identity)
@@ -67,6 +67,9 @@ class Batch:
         return self.apply_control(self.owner_identity(owner),action)
 
     def apply_control(self,identity,action):
+        if action in ('align_start','align_pause'):
+            self.manager.alignment.control(identity['id'],action=='align_start')
+            return self._status(identity['id'])
         if action not in ('start','pause'):raise profile.ProfileError(400)
         with self.manager.lock:
             if action=='start':

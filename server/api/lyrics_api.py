@@ -20,6 +20,7 @@ import urllib.request
 
 import profile_api as profile
 from lyrics_batch import Batch
+from lyrics_alignment import Broker
 
 MAX_BODY=256*1024
 MAX_TEXT=128*1024
@@ -180,7 +181,7 @@ def external_lyrics(song,pace=.25):
 
 
 class Manager:
-    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics,protected_owner=None,background_guard=None):
+    def __init__(self,state,catalog,guard=None,start=True,native=native_lyrics,external=external_lyrics,protected_owner=None,background_guard=None,decode_slot=None):
         self.protected_owner=protected_owner or os.environ.get('MUSIC_PROTECTED_OWNER_ID') or None
         if self.protected_owner is not None and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',self.protected_owner):raise ValueError('Invalid protected owner ID')
         self.background_guard=background_guard
@@ -204,6 +205,7 @@ class Manager:
             db.execute('CREATE TABLE IF NOT EXISTS timing(song TEXT PRIMARY KEY,version TEXT NOT NULL,revision TEXT NOT NULL,offset_ms INTEGER NOT NULL,updated REAL NOT NULL)')
         self.path.chmod(0o600);self.file_lock=None
         self.batch=Batch(self)
+        self.alignment=Broker(self,decode_slot)
         if start:
             import fcntl
             import stat
@@ -245,6 +247,13 @@ class Manager:
             # Visibility was checked before looking at a global content cache.
             with self.db() as db:row=db.execute('SELECT value FROM cache WHERE key=? AND expires>?',(version,now)).fetchone()
             if row:return self.decorate(identity,key,version,json.loads(row[0]))
+            restored=self.alignment.restore(version)
+            if restored:
+                with self.db() as db:
+                    db.execute('INSERT INTO cache VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires=excluded.expires,updated=excluded.updated',
+                               (version,json.dumps(restored,separators=(',',':')),now+365*86400,now))
+                    self.prune(db)
+                return self.decorate(identity,key,version,restored)
             if version not in self.pending:
                 if self.work.full():return self.decorate(identity,key,version,response('error'))
                 self.pending.add(version);self.work.put_nowait((identity.copy(),song,version,now))
@@ -294,6 +303,7 @@ class Manager:
             self.guard(identity)
             _,current=self.song(identity['id'],song['id'])
             if current!=key:return
+            value=self.alignment.restore(key,value)
         except urllib.error.HTTPError as error:
             if error.code==429:
                 try:
@@ -324,7 +334,9 @@ class Manager:
         while not self.stop.is_set():
             try:item=self.work.get(timeout=.5)
             except queue.Empty:
-                try:self.batch.step()
+                try:
+                    self.alignment.discover()
+                    self.batch.step()
                 except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):pass
                 continue
             try:self.process(item)

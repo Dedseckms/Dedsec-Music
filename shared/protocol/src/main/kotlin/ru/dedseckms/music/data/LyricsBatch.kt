@@ -5,12 +5,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
+data class LyricsAlignmentProgress(val enabled: Boolean, val total: Int, val pending: Int, val done: Int,
+    val skipped: Int, val errors: Int, val active: Int) {
+    companion object {
+        fun parse(o: JSONObject) = LyricsAlignmentProgress(o.getBoolean("enabled"), o.getInt("total"), o.getInt("pending"),
+            o.getInt("done"), o.getInt("skipped"), o.getInt("errors"), o.getInt("active"))
+    }
+}
 data class LyricsBatchProgress(val total: Int, val checked: Int, val synced: Int, val plain: Int,
-    val instrumental: Int, val notFound: Int, val errors: Int, val pending: Int, val running: Boolean, val discovering: Boolean) {
+    val instrumental: Int, val notFound: Int, val errors: Int, val pending: Int, val running: Boolean, val discovering: Boolean,
+    val alignment: LyricsAlignmentProgress? = null) {
     companion object {
         fun parse(o: JSONObject) = LyricsBatchProgress(o.getInt("total"), o.getInt("checked"), o.getInt("synced"),
             o.getInt("plain"), o.getInt("instrumental"), o.getInt("notFound"), o.getInt("errors"), o.getInt("pending"),
-            o.getBoolean("running"), o.optBoolean("discovering"))
+            o.getBoolean("running"), o.optBoolean("discovering"), o.optJSONObject("alignment")?.let(LyricsAlignmentProgress::parse))
     }
 }
 data class LyricsBatchState(val progress: LyricsBatchProgress? = null, val error: String? = null, val acting: Boolean = false)
@@ -24,7 +32,7 @@ class LyricsBatchSession(parent: CoroutineScope, private val api: ProfileApi) : 
     private var busy = false
     init { scope.launch { while (isActive) { request(null); delay(5000) } } }
     fun action(action: String) {
-        require(action in setOf("start", "pause"))
+        require(action in setOf("start", "pause", "align_start", "align_pause"))
         if (mutable.value.acting) return
         mutable.value = mutable.value.copy(acting = true)
         scope.launch { while (busy) delay(50); request(action) }
