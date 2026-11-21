@@ -118,7 +118,7 @@ class Engine:
 
     def _mix(self,uid,request):
         songs=self.catalog.songs(uid)
-        if request.get('childMode'):songs={key:song for key,song in songs.items() if song.get('explicitStatus')=='clean'}
+        if request.get('childMode'):songs={key:song for key,song in songs.items() if song.get('explicitStatus')!='explicit'}
         features=self.index.available(songs);now=int(time.time()*1000)
         with self.db() as db:
             feedback={row['id']:dict(row) for row in db.execute('SELECT * FROM feedback WHERE uid=?',(uid,))}

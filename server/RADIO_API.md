@@ -11,6 +11,9 @@ native Navidrome JWT в Bearer header. Публичной регистрации
 
 - mood: ANY, ENERGY, CHILL, FOCUS, WORKOUT, PARTY, SAD, HAPPY.
 - mode: BALANCED, FAVORITES, DISCOVERY.
+- childMode: необязательный строгий boolean, по умолчанию false. При true исключает
+  только effective explicit; неизвестный рейтинг допускается. Ручная отметка администратора
+  действует поверх исходного рейтинга. Фильтр применяется до персонализации и выбора.
 - size:1–60. history: до200 `{id,playedAt,count}`, playedAt в epoch milliseconds.
 - dislikedIds: до1000 ID, excludeIds: до100 ID. Вход до64KiB, ответ до512KiB.
 - Ответ: `{songs:[OpenSubsonicSong],analysis:{indexed,total},reason:null|"ANALYZING"|"NO_MATCHES",mood,mode}`.

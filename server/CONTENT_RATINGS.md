@@ -1,8 +1,9 @@
 # Content ratings and child mode
 
 Songs use OpenSubsonic `explicitStatus`: `clean`, `explicit`, or an empty string
-for unknown. Unknown does not mean clean. A child-mode radio request only admits
-known clean songs, before taste calculation, analysis priorities and selection.
+for unknown. Unknown does not mean clean. A child-mode radio request blocks only
+explicit songs; clean and unknown songs are allowed before taste calculation,
+analysis priorities and selection.
 There is no server-side mix response cache shared between child and normal mode.
 Clients must keep the mode in queue/cache keys and recheck playback separately.
 
