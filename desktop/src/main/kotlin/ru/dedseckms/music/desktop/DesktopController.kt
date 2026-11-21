@@ -148,19 +148,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         mutable.update { it.copy(songs = it.songs.map(::updateSong), favorites = it.favorites.map(::updateSong),
             offline = it.offline.map(::updateSong), page = updatePage(it.page), search = it.search.copy(songs = it.search.songs.map(::updateSong)),
             now = it.now?.let(::updateSong), queue = it.queue.map(::updateSong), downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
-        if (blockedInQueue) {
-            if (state.value.now?.let { !allowed(it) } == true) applyChildMode(true, force = true, resetDownloads = false)
-            else {
-                val ordered = queue.order.map { canonicalSong(queue.songs[it]) }
-                val selected = ContentPolicy.selection(ordered, queue.cursor, state.value.childMode)
-                if (selected != null) {
-                    queueEpoch++; prepareJob?.cancel(); audio.clearNext(cancelTransition = true)
-                    queue.set(selected.songs, selected.index)
-                    mutable.update { it.copy(queue = selected.songs, cursor = selected.index, shuffle = false) }
-                    prepareNext()
-                }
-            }
-        }
+        if (blockedInQueue) applyChildMode(true, force = true, resetDownloads = false)
         if (cancelDownload) downloadAll(emptyList(), silent = true)
     }
     fun notice(text: String?) { mutable.update { it.copy(message = text) } }
