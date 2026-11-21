@@ -125,7 +125,19 @@ class DesktopAudio(private val scope: CoroutineScope, private val ended: () -> U
         if (!slot.player.media().play(target.uri, ":network-caching=1200", ":no-video")) reset(slot)
         else slot.player.audio().setVolume(0)
     }
-    fun clearNext() { scope.launch(audioThread) { next = null; if (fade == null) spare?.let(::reset) } }
+    fun clearNext(cancelTransition: Boolean = false) { scope.launch(audioThread) {
+        next = null
+        if (cancelTransition) {
+            generation++
+            fade?.let { transition ->
+                // Revoke a staged transition while retaining the currently selected safe track.
+                active = transition.from; spare = transition.to; reset(transition.to)
+                applyVolume(transition.from, 1.0)
+            }
+            fade = null
+        }
+        if (fade == null) spare?.let(::reset)
+    } }
     private fun tick() {
         val current = active ?: return
         val clock = System.nanoTime()

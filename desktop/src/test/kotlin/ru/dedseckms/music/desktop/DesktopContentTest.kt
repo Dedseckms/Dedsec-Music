@@ -75,23 +75,23 @@ class DesktopContentTest {
         try {
             c.childMode(true)
             c.play(listOf(explicit, clean, unknown, clean), 3)
-            assertEquals(listOf(clean, clean), c.state.value.queue)
-            assertEquals(1, c.state.value.cursor)
+            assertEquals(listOf(clean, unknown, clean), c.state.value.queue)
+            assertEquals(2, c.state.value.cursor)
             c.play(listOf(explicit, clean), 0)
             assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
-            assertEquals(clean, c.state.value.now); assertEquals(1, c.state.value.cursor)
+            assertEquals(clean, c.state.value.now); assertEquals(2, c.state.value.cursor)
             c.playCollection(listOf(explicit, unknown, clean), "Collection")
-            assertEquals(listOf(clean), c.state.value.queue)
+            assertEquals(listOf(unknown, clean), c.state.value.queue)
             c.shuffle(); c.repeat(); c.skip(true)
-            assertTrue(c.state.value.queue.all { it.contentRating == ContentRating.CLEAN })
+            assertTrue(c.state.value.queue.none { it.contentRating == ContentRating.EXPLICIT })
             c.downloadAll(listOf(explicit, unknown))
-            assertTrue(c.state.value.downloadIds.isEmpty())
+            assertEquals(setOf(unknown.id), c.state.value.downloadIds)
             assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
             c.logout()
             assertFalse(c.state.value.childMode); assertNull(c.state.value.now)
         } finally { c.close() }
     }
-    @Test fun legacyOfflineMetadataStaysUnknownAndFilesSurviveModeChange() {
+    @Test fun legacyOfflineMetadataStaysUnknownAndRemainsPlayableWithoutDeletingFiles() {
         val c = controller()
         try {
             val local = c.store!!; Files.createDirectories(local.audio(unknown).parent)
@@ -99,11 +99,10 @@ class DesktopContentTest {
             val cached = local.offline().single()
             assertEquals(ContentRating.UNKNOWN, cached.contentRating)
             c.childMode(true); c.play(listOf(cached))
-            assertNull(c.state.value.now); assertTrue(Files.exists(local.audio(cached)))
-            assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
+            assertEquals(cached, c.state.value.now); assertTrue(Files.exists(local.audio(cached)))
         } finally { c.close() }
     }
-    @Test fun manualCleanRatingAllowsUnknownAndExplicitResultInvalidatesChildPlayback() {
+    @Test fun manualRatingChangesKeepAllowedPlaybackAndExplicitResultInvalidatesChildQueue() {
         val c = controller()
         try {
             state(c).value = DesktopState(loggedIn = true, isAdmin = true, songs = listOf(unknown), favorites = listOf(unknown),
@@ -119,13 +118,15 @@ class DesktopContentTest {
             c.play(c.state.value.songs)
             assertEquals(unknown.id, c.state.value.now?.id)
             val oldPlay = field(c, "playJob").get(c) as Job
+            c.applyContentRating(unknown.id, ContentRating.UNKNOWN, false)
+            assertFalse(oldPlay.isCancelled); assertEquals(unknown.id, c.state.value.now?.id)
             c.applyContentRating(unknown.id, ContentRating.EXPLICIT, true)
             assertTrue(oldPlay.isCancelled); assertNull(c.state.value.now); assertTrue(c.state.value.queue.isEmpty())
             assertEquals(ContentRating.EXPLICIT, c.state.value.songs.single().contentRating)
             c.applyContentRating(unknown.id, ContentRating.UNKNOWN, false)
             assertFalse(c.state.value.songs.single().contentRatingOverride)
             c.play(c.state.value.songs)
-            assertNull(c.state.value.now); assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
+            assertEquals(ContentRating.UNKNOWN, c.state.value.now?.contentRating)
         } finally { c.close() }
     }
     @Test fun manualRatingUpdatesCachedMetadataWithoutDeletingAudioOrChangingAnotherAccount() {
@@ -235,6 +236,22 @@ class DesktopContentTest {
         assertEquals(ContentRating.EXPLICIT, reopened.history().single().song.contentRating)
         assertEquals(ContentRating.EXPLICIT, reopened.pendingDownloads().single().contentRating)
         assertEquals(ContentRating.EXPLICIT, reopened.canonicalRating(old.copy(contentRatingCheckedAt = 1)).contentRating)
+    }
+
+    @Test fun ratingAFutureTrackExplicitKeepsSafePlaybackAndUnrelatedDownloadRunning() {
+        val c = controller()
+        try {
+            c.childMode(true); c.play(listOf(clean, unknown))
+            val playback = field(c, "playJob").get(c) as Job
+            val unrelatedDownload = c.scope.launch { delay(Long.MAX_VALUE) }
+            field(c, "downloadJob").set(c, unrelatedDownload)
+            field(c, "activeDownloadId").set(c, clean.id)
+            c.applyContentRating(unknown.id, ContentRating.EXPLICIT, true)
+            assertEquals(clean, c.state.value.now); assertEquals(listOf(clean), c.state.value.queue)
+            assertFalse(playback.isCancelled); assertFalse(unrelatedDownload.isCancelled)
+            c.applyContentRating(unknown.id, ContentRating.UNKNOWN, false)
+            assertEquals(clean, c.state.value.now); assertFalse(playback.isCancelled)
+        } finally { c.close() }
     }
 
 }
