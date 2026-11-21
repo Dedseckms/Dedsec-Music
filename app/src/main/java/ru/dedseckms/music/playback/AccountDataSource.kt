@@ -27,7 +27,7 @@ class AccountDataSource(private val app: MusicApp) : DataSource {
         val id = dataSpec.uri.lastPathSegment ?: throw IOException("Нет идентификатора трека")
         val store = LocalStore(app, credentials.accountId)
         val song = (app.playbackSongs["${credentials.accountId}:$id"] ?: store.offlineSong(id))?.let(store::contentRatedSong)
-        if (store.childMode() && (song == null || !ru.dedseckms.music.data.ContentPolicy.allowed(song, true))) {
+        if (store.childMode() && song?.let { !ru.dedseckms.music.data.ContentPolicy.allowed(it, true) } == true) {
             throw IOException(ru.dedseckms.music.data.ContentPolicy.BLOCKED_MESSAGE)
         }
         accountId = credentials.accountId; sourceSong = song; sourceStore = store
@@ -51,7 +51,7 @@ class AccountDataSource(private val app: MusicApp) : DataSource {
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int = try {
         val account = accountId ?: throw IOException("Источник закрыт")
         if (app.credentials.activeId() != account) throw IOException("Аккаунт изменился")
-        if (sourceStore?.childMode() == true && sourceSong?.let { ru.dedseckms.music.data.ContentPolicy.allowed(sourceStore?.contentRatedSong(it) ?: it, true) } != true) {
+        if (sourceStore?.childMode() == true && sourceSong?.let { ru.dedseckms.music.data.ContentPolicy.allowed(sourceStore?.contentRatedSong(it) ?: it, true) } == false) {
             throw IOException(ru.dedseckms.music.data.ContentPolicy.BLOCKED_MESSAGE)
         }
         delegate?.read(buffer, offset, length) ?: throw IOException("Источник закрыт")

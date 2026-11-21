@@ -577,7 +577,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             if (state.isAdmin) OutlinedButton({ serverDashboard = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Dns, null); Spacer(Modifier.width(8.dp)); Text("Сервер и диски") }
             AppearanceControls(state, vm)
             HorizontalDivider()
-            PreferenceSwitch("Детский режим", "Только треки с отметкой «без мата». Неизвестная маркировка блокируется", state.childMode, vm::childMode)
+            PreferenceSwitch("Детский режим", "Блокирует треки с отметкой E. Треки без маркировки доступны", state.childMode, vm::childMode)
             PreferenceSwitch("Только по Wi-Fi", "Применяется и к уже добавленной очереди", state.wifiOnly, vm::wifiOnly)
             PreferenceSwitch("Скачивать прослушанное", "После прослушивания 80% трека", state.autoOffline.afterListen, { vm.autoOffline(afterListen = it) })
             PreferenceSwitch("Скачивать любимое", "При добавлении трека в «Мне нравится»", state.autoOffline.onFavorite, { vm.autoOffline(onFavorite = it) })
