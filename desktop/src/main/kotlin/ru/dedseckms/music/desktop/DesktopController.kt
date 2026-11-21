@@ -75,6 +75,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var downloadJob: Job? = null
     private var queueSaveJob: Job? = null
     private val offlineGate = OfflineListenGate()
+    private val contentRatingLock = kotlinx.coroutines.sync.Mutex()
     private val playlistLock = kotlinx.coroutines.sync.Mutex()
     private fun playlistAction(block: suspend (NavApi) -> Unit) = action { nav ->
         if (state.value.importStatus.job?.syncingPlaylists == true) { notice("Дождись завершения переноса плейлистов"); return@action }
@@ -118,16 +119,17 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         val service = profile ?: return; val nav = api ?: return; val local = store ?: return
         val revision = generation
         track(scope.launch {
-            try {
+            try { contentRatingLock.withLock {
+                currentCoroutineContext().ensureActive(); if (revision != generation) return@withLock
                 val result = service.await { setContentRating(song.id, rating) }
-                currentCoroutineContext().ensureActive(); if (revision != generation) return@launch
+                currentCoroutineContext().ensureActive(); if (revision != generation) return@withLock
                 nav.invalidateContentRating(song.id)
                 val priorDownload = downloadJob; val priorSave = queueSaveJob
                 applyContentRating(song.id, result.rating, result.overridden)
                 priorDownload?.join(); priorSave?.join()
                 withContext(Dispatchers.IO) { local.updateContentRating(song.id, result.rating, result.overridden) }
                 if (revision == generation) notice("Маркировка контента сохранена")
-            } catch (e: CancellationException) { throw e }
+            } } catch (e: CancellationException) { throw e }
             catch (_: Exception) { if (revision == generation) notice("Не удалось изменить маркировку. Проверь права администратора и подключение") }
         })
     }

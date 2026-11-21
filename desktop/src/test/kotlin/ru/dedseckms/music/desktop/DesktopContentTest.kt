@@ -149,4 +149,52 @@ class DesktopContentTest {
         assertTrue(Files.exists(local.audio(unknown)))
     }
 
+    @Test fun delayedRatingResponseCannotOvertakeTheNextServerWriteOrCachedResult() = runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            val firstReceived = java.util.concurrent.CountDownLatch(1)
+            val releaseFirst = java.util.concurrent.CountDownLatch(1)
+            val secondReceived = java.util.concurrent.CountDownLatch(1)
+            val writes = java.util.concurrent.atomic.AtomicInteger()
+            val serverRating = java.util.concurrent.atomic.AtomicReference("")
+            server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): okhttp3.mockwebserver.MockResponse {
+                    if (request.path == "/auth/login") return okhttp3.mockwebserver.MockResponse().setBody("""{"token":"fixture"}""")
+                    if (request.path != "/dedsec/profile/v1/content-ratings/override") return okhttp3.mockwebserver.MockResponse().setResponseCode(404)
+                    val status = org.json.JSONObject(request.body.readUtf8()).getString("status")
+                    serverRating.set(status)
+                    if (writes.incrementAndGet() == 1) {
+                        firstReceived.countDown()
+                        releaseFirst.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                    } else secondReceived.countDown()
+                    return okhttp3.mockwebserver.MockResponse().setBody("""{"ratings":{"unknown":"$status"},"overrides":{"unknown":"$status"}}""")
+                }
+            }
+            val dispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+            val c = DesktopController(CoroutineScope(SupervisorJob() + dispatcher), DesktopPreferences(temp.newFolder().toPath()))
+            try {
+                val credentials = Credentials(server.url("/").toString(), "admin", "fixture")
+                val local = DesktopStore(credentials, temp.newFolder().toPath())
+                Files.createDirectories(local.audio(unknown).parent); Files.write(local.audio(unknown), byteArrayOf(1, 2, 3))
+                local.downloaded(unknown, 3)
+                field(c, "api").set(c, NavApi(credentials, allowLocalHttpForTests = true))
+                field(c, "profile").set(c, ProfileApi(credentials, allowLocalHttpForTests = true))
+                field(c, "store").set(c, local)
+                state(c).value = DesktopState(loggedIn = true, isAdmin = true, songs = listOf(unknown), offline = listOf(unknown))
+                c.setContentRating(unknown, ContentRating.CLEAN)
+                assertTrue(firstReceived.await(3, java.util.concurrent.TimeUnit.SECONDS))
+                c.setContentRating(unknown, ContentRating.EXPLICIT)
+                assertFalse(secondReceived.await(200, java.util.concurrent.TimeUnit.MILLISECONDS), "The second mutation must wait for the first response and cache write")
+                releaseFirst.countDown()
+                @Suppress("UNCHECKED_CAST")
+                val tasks = (field(c, "accountTasks").get(c) as Set<Job>).toList()
+                withTimeout(5000) { tasks.joinAll() }
+                assertEquals(2, writes.get()); assertEquals("explicit", serverRating.get())
+                assertEquals(ContentRating.EXPLICIT, c.state.value.songs.single().contentRating)
+                assertEquals(ContentRating.EXPLICIT, local.offline().single().contentRating)
+                assertTrue(local.offline().single().contentRatingOverride)
+                assertTrue(Files.exists(local.audio(unknown)))
+            } finally { releaseFirst.countDown(); c.close(); dispatcher.close() }
+        }
+    }
+
 }
