@@ -26,7 +26,8 @@ object ServerAddress {
     }
 }
 
-class NavApi(val credentials: Credentials, val client: OkHttpClient = httpClient(), allowLocalHttpForTests: Boolean = false) {
+class NavApi(val credentials: Credentials, val client: OkHttpClient = httpClient(), allowLocalHttpForTests: Boolean = false, enableContentRatings: Boolean = !allowLocalHttpForTests) {
+    private var ratings: ContentRatings? = if (enableContentRatings) ContentRatings(credentials, client, allowLocalHttpForTests) else null
     private val localHttp = allowLocalHttpForTests
     private val pending = java.util.concurrent.ConcurrentHashMap.newKeySet<okhttp3.Call>()
     @Volatile private var cancelled = false
@@ -34,7 +35,7 @@ class NavApi(val credentials: Credentials, val client: OkHttpClient = httpClient
 
     /** Cancelling a screen request also closes its HTTP exchange, rather than just hiding its result. */
     suspend fun <T> await(block: NavApi.() -> T): T = try { withTimeout(12_000) { coroutineScope {
-        val scoped = NavApi(credentials, client, localHttp)
+        val scoped = NavApi(credentials, client, localHttp, false).also { it.ratings = ratings }
         val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
             try { awaitCancellation() } finally {
                 scoped.cancelled = true
@@ -82,6 +83,7 @@ class NavApi(val credentials: Credentials, val client: OkHttpClient = httpClient
                     }
                     throw MusicApiException(code, message)
                 }
+                ratings?.enrich(root)
                 return root
             } } finally { pending.remove(call) }
         } catch (error: MusicApiException) { throw error }

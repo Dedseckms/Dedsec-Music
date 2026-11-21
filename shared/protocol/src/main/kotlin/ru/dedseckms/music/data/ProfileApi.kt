@@ -39,7 +39,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
     private fun execute(request: Request, upload: Boolean = false): Response {
         if (cancelled) throw CancellationException("Profile request cancelled")
         val call = (if (upload) client.newBuilder().retryOnConnectionFailure(false).build() else client).newCall(request)
-        call.timeout().timeout(if (upload) 600 else 12, TimeUnit.SECONDS)
+        call.timeout().timeout(if (upload) 600_000 else minOf(12_000, client.callTimeoutMillis.takeIf { it > 0 } ?: 12_000).toLong(), TimeUnit.MILLISECONDS)
         pending += call
         if (cancelled) call.cancel()
         try {
@@ -94,6 +94,19 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         val value = JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8))
         value.optInt("schema") == 1 && value.optJSONObject("uploads")?.optString("mode") == "navidrome" &&
             value.optJSONObject("uploads")?.optString("path") == "/dedsec/profile/v1/uploads"
+    }
+    /** Optional metadata only; authorization remains bound to the configured music origin. */
+    fun contentRatings(ids: List<String>): Map<String, ContentRating> {
+        require(ids.size <= 500 && ids.all { it.matches(Regex("[A-Za-z0-9_-]{1,80}")) })
+        val wanted = ids.toSet()
+        val body = JSONObject().put("ids", JSONArray(ids.distinct())).toString().toRequestBody("application/json".toMediaType())
+        return authorized { request("content-ratings", it).post(body).build() }.use {
+            if (!it.isSuccessful) throw IOException("Маркировка треков пока недоступна")
+            val values = JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)).getJSONObject("ratings")
+            values.keys().asSequence().filter { key -> key in wanted }.mapNotNull { key ->
+                ContentRating.parse(values.optString(key)).takeUnless { rating -> rating == ContentRating.UNKNOWN }?.let { rating -> key to rating }
+            }.toMap()
+        }
     }
     fun lyrics(id: String): JSONObject {
         require(id.isNotBlank() && id.length <= 128 && id.none { it == '/' || it == '\\' || it.code < 32 } && id !in setOf(".", ".."))
@@ -246,7 +259,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         }
     }
     fun radio(mode: MixMode, mood: MixMood, history: List<HistoryEntry> = emptyList(), disliked: Set<String> = emptySet(),
-              exclude: List<String> = emptyList(), size: Int = 40): RadioMix {
+              exclude: List<String> = emptyList(), size: Int = 40, childMode: Boolean = false): RadioMix {
         val recent = JSONArray()
         var historyBytes = 0
         history.sortedByDescending { it.lastPlayed }.take(200).forEach {
@@ -264,11 +277,11 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         }
         val data = radioRequest("mix", JSONObject().put("mode", mode.name).put("mood", mood.name).put("size", size.coerceIn(1, 60))
             .put("history", recent).put("dislikedIds", ids(disliked.take(1000), 24000))
-            .put("excludeIds", ids(exclude.takeLast(100), 6000)))
+            .put("excludeIds", ids(exclude.takeLast(100), 6000)).put("childMode", childMode))
         val tracks = data.getJSONArray("songs")
         if (tracks.length() > 60) throw IOException("Слишком большой микс")
         val analysis = data.optJSONObject("analysis")
-        return RadioMix((0 until tracks.length()).map { Song.parse(tracks.getJSONObject(it)) },
+        return RadioMix((0 until tracks.length()).map { Song.parse(tracks.getJSONObject(it)) }.filter { ContentPolicy.allowed(it, childMode) },
             analysis?.optInt("indexed") ?: 0, analysis?.optInt("total") ?: 0, data.optString("reason").takeUnless { it.isBlank() || it == "null" })
     }
     fun radioEvent(id: String, kind: String, positionMs: Long, durationMs: Long) {
