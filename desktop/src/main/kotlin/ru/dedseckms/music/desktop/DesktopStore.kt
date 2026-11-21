@@ -19,6 +19,8 @@ class DesktopStore(val credentials: Credentials, val directory: Path = DesktopPa
     private val lock = Any()
     fun offlinePreferences(): OfflinePreferences = read("offline-preferences.json").let { OfflinePreferences(it.optBoolean("afterListen"), it.optBoolean("onFavorite")) }
     fun offlinePreferences(value: OfflinePreferences) = synchronized(lock) { write("offline-preferences.json", JSONObject().put("afterListen", value.afterListen).put("onFavorite", value.onFavorite)) }
+    fun childMode(): Boolean = read("content-preferences.json").optBoolean("childMode", false)
+    fun childMode(enabled: Boolean) = synchronized(lock) { write("content-preferences.json", JSONObject().put("childMode", enabled)) }
     private fun queueDirectory(): Path = directory.resolve("download-queue").also { Files.createDirectories(it) }
     fun pendingDownloads(): List<Song> = Files.list(queueDirectory()).use { paths -> paths.filter { it.fileName.toString().endsWith(".json") }.map { path -> runCatching { Song.parse(JSONObject(Files.readString(path))) }.getOrNull() }.toList().filterNotNull() }
     fun queueDownloads(songs: List<Song>) { for (song in songs) synchronized(lock) { write("download-queue/${sha256(song.id)}.json", song.json()) } }
