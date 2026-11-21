@@ -99,8 +99,9 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         } }
     }
     private fun allowed(song: Song) = ContentPolicy.allowed(song, state.value.childMode)
-    fun childMode(enabled: Boolean) {
-        if (enabled == state.value.childMode) return
+    fun childMode(enabled: Boolean) = applyChildMode(enabled, force = false)
+    private fun applyChildMode(enabled: Boolean, force: Boolean) {
+        if (!force && enabled == state.value.childMode) return
         // Invalidate pending decoders and callbacks before publishing the new policy.
         queueEpoch++; playJob?.cancel(); prepareJob?.cancel(); invalidateMix()
         audio.stop(); audio.clearNext(); queue.set(emptyList(), 0)
@@ -111,6 +112,38 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
             downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
         store?.childMode(enabled)
         downloadAll(emptyList(), silent = true)
+    }
+    fun setContentRating(song: Song, rating: ContentRating?) {
+        if (!state.value.isAdmin || state.value.demo) return
+        val service = profile ?: return; val nav = api ?: return; val local = store ?: return
+        val revision = generation
+        track(scope.launch {
+            try {
+                val result = service.await { setContentRating(song.id, rating) }
+                currentCoroutineContext().ensureActive(); if (revision != generation) return@launch
+                nav.invalidateContentRating(song.id)
+                val priorDownload = downloadJob; val priorSave = queueSaveJob
+                applyContentRating(song.id, result.rating, result.overridden)
+                priorDownload?.join(); priorSave?.join()
+                withContext(Dispatchers.IO) { local.updateContentRating(song.id, result.rating, result.overridden) }
+                if (revision == generation) notice("Маркировка контента сохранена")
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (revision == generation) notice("Не удалось изменить маркировку. Проверь права администратора и подключение") }
+        })
+    }
+    /** Apply the server's effective rating to every live reference before revalidating playback. */
+    internal fun applyContentRating(id: String, rating: ContentRating, overridden: Boolean) {
+        // Old download metadata must not overwrite the administrator's new server result.
+        downloadJob?.cancel(); downloadJob = null; queueSaveJob?.cancel(); queueSaveJob = null
+        fun updateSong(song: Song) = if (song.id == id) song.copy(contentRating = rating, contentRatingOverride = overridden) else song
+        fun updatePage(page: DesktopPage?) = page?.copy(songs = page.songs.map(::updateSong))
+        queue.updateSong(id, ::updateSong)
+        val pending = downloadQueue.map(::updateSong); downloadQueue.clear(); downloadQueue.addAll(pending)
+        destinations.replaceAll { _, value -> value.first to updatePage(value.second) }
+        mutable.update { it.copy(songs = it.songs.map(::updateSong), favorites = it.favorites.map(::updateSong),
+            offline = it.offline.map(::updateSong), page = updatePage(it.page), search = it.search.copy(songs = it.search.songs.map(::updateSong)),
+            now = it.now?.let(::updateSong), queue = it.queue.map(::updateSong)) }
+        if (state.value.childMode) applyChildMode(true, force = true) else downloadAll(emptyList(), silent = true)
     }
     fun notice(text: String?) { mutable.update { it.copy(message = text) } }
     private fun failure(error: Exception) = if (error is java.io.IOException && !error.message.orEmpty().contains("http", true)) error.message ?: "Проверь соединение" else "Не удалось выполнить операцию. Проверь подключение"
