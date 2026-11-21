@@ -8,6 +8,8 @@ import ru.dedseckms.music.data.NavApi
 class MusicApp : Application() {
     val playRequests = ru.dedseckms.music.data.PlayRequests()
     val accountChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val contentPolicyChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val playbackSongs = java.util.concurrent.ConcurrentHashMap<String, ru.dedseckms.music.data.Song>()
     val volumeChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val credentials by lazy { CredentialStore(this) }
     val covers by lazy { ru.dedseckms.music.data.CoverStore(java.io.File(cacheDir, "covers"), credentials::load) }

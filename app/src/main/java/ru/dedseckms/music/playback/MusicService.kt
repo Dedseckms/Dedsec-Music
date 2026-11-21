@@ -72,14 +72,9 @@ class MusicService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .build()
+        scope.launch { app.contentPolicyChanges.collect { resetPlayback() } }
         scope.launch { app.accountChanges.collect {
-            playbackRevision++
-            artworkJob?.cancel()
-            prefetchJob?.cancel(); prefetchKey = null
-            hydration?.cancel(); mixExtension?.cancel(); extending = false
-            queueWindow = null; queueAccount = null; mixActive = false; mixAccount = null; queueSource = ""
-            loudness?.release(); loudness = null; player.volume = 1f
-            player.stop(); player.clearMediaItems()
+            resetPlayback()
         } }
         scope.launch { app.volumeChanges.collect { applyTrackVolume() } }
         player.addListener(object : Player.Listener {
@@ -98,6 +93,7 @@ class MusicService : MediaLibraryService() {
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (mediaItem != null && songFromItem(mediaItem)?.let { !allowed(it) } != false) { resetPlayback(); return }
                 applyTrackVolume()
                 if (transitionId != mediaItem?.mediaId) { recordedTransition = false; transitionId = mediaItem?.mediaId }
                 if (mediaItem != null && mediaItem.mediaMetadata.artworkData == null) loadArtwork(mediaItem)
@@ -147,6 +143,18 @@ class MusicService : MediaLibraryService() {
         }
     }
 
+    private fun resetPlayback() {
+        playbackRevision++
+        app.playRequests.clear(); app.playbackSongs.clear()
+        artworkJob?.cancel(); prefetchJob?.cancel(); prefetchKey = null
+        hydration?.cancel(); mixExtension?.cancel(); extending = false
+        queueWindow = null; queueAccount = null; mixActive = false; mixAccount = null; queueSource = ""
+        loudness?.release(); loudness = null; player.volume = 1f
+        player.stop(); player.clearMediaItems()
+    }
+    private fun allowed(song: Song): Boolean = ContentPolicy.allowed(song, app.local()?.childMode() ?: false)
+    private fun playable(songs: List<Song>): List<Song> = songs.filter(::allowed)
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
     private fun publishNavigation() {
         session.setSessionExtras(Bundle().apply {
@@ -186,6 +194,8 @@ class MusicService : MediaLibraryService() {
         .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsBrowsable(true).setIsPlayable(false).build()).build()
 
     private fun resolve(song: Song, accountId: String): MediaItem {
+        if (!allowed(song)) throw IOException(ContentPolicy.BLOCKED_MESSAGE)
+        app.playbackSongs["$accountId:${song.id}"] = song
         return item(song, mixActive, currentMixMode, currentMixMood, queueSource).buildUpon().setUri(Uri.Builder().scheme("dedsec").authority(accountId).appendPath(song.id).build())
             .setMimeType(song.contentType).build()
     }
@@ -266,7 +276,7 @@ class MusicService : MediaLibraryService() {
     }
 
     private suspend fun mixSongs(profile: ProfileApi, store: LocalStore, mode: MixMode, mood: MixMood, exclude: List<String> = emptyList()): List<Song> =
-        profile.await { radio(mode, mood, store.history(), store.disliked(), exclude) }.songs
+        profile.await { radio(mode, mood, store.history(), store.disliked(), exclude, childMode = store.childMode()) }.songs.filter { ContentPolicy.allowed(it, store.childMode()) }
 
     private fun extendMix() {
         if (extending || mixAccount != app.credentials.activeId()) return
@@ -299,14 +309,35 @@ class MusicService : MediaLibraryService() {
             player.stop()
             player.clearMediaItems()
             val reference = mediaItems.singleOrNull()?.mediaId?.takeIf { it.startsWith("queue:") }
-                ?: return super.onSetMediaItems(session, controller, mediaItems, startIndex, startPositionMs)
+                ?: return background {
+                    val account = app.credentials.activeId() ?: throw IOException("Войди в аккаунт")
+                    val api = app.api() ?: throw IOException("Войди в аккаунт")
+                    val wave = mediaItems.singleOrNull()?.mediaId == "wave"
+                    val songs = if (wave) mixSongs(app.profileApi() ?: throw IOException("Войди в аккаунт"), app.local() ?: throw IOException("Войди в аккаунт"), MixMode.BALANCED, MixMood.ANY)
+                    else mediaItems.map { entry ->
+                        if (controller.uid == applicationInfo.uid) songFromItem(entry)
+                            ?: Song.parse(api.call("getSong", "id" to entry.mediaId).getJSONObject("song"))
+                        else app.local()?.offlineSong(entry.mediaId)
+                            ?: entry.requestMetadata.searchQuery?.let { api.songs(it, count = 1).firstOrNull() }
+                            ?: Song.parse(api.call("getSong", "id" to entry.mediaId).getJSONObject("song"))
+                    }
+                    val selection = ContentPolicy.selection(songs, startIndex.coerceAtLeast(0), app.local()?.childMode() ?: false)
+                        ?: throw IOException(ContentPolicy.BLOCKED_MESSAGE)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (revision != playbackRevision || account != app.credentials.activeId()) throw IOException("Очередь устарела")
+                        if (wave) { mixActive = true; mixAccount = account; currentMixMode = MixMode.BALANCED; currentMixMood = MixMood.ANY; player.shuffleModeEnabled = false; player.repeatMode = Player.REPEAT_MODE_OFF }
+                        MediaSession.MediaItemsWithStartPosition(selection.songs.map { resolve(it, account) }, selection.index, startPositionMs)
+                    }
+                }
             if (controller.uid != applicationInfo.uid) {
                 return background { throw IOException("Очередь принадлежит приложению") }
             }
             return background {
                 val account = app.credentials.activeId() ?: throw IOException("Войди в аккаунт")
                 val request = app.playRequests.take(reference.removePrefix("queue:"), account) ?: throw IOException("Очередь устарела")
-                val window = QueueWindow(request)
+                val selection = ContentPolicy.selection(request.songs, request.selected, LocalStore(this@MusicService, account).childMode())
+                    ?: throw IOException(ContentPolicy.BLOCKED_MESSAGE)
+                val window = QueueWindow(request.copy(songs = selection.songs, selected = selection.index))
                 withContext(Dispatchers.Main.immediate) {
                     if (revision != playbackRevision || account != app.credentials.activeId()) throw IOException("Выбран другой трек")
                     queueWindow = window; queueAccount = account
@@ -351,10 +382,10 @@ class MusicService : MediaLibraryService() {
                     MediaItem.Builder().setMediaId("wave").setMediaMetadata(MediaMetadata.Builder().setTitle("Моя волна")
                         .setSubtitle("Персональный микс из своей библиотеки").setIsBrowsable(false).setIsPlayable(true).build()).build(),
                     browsable("favorites", "Любимое"), browsable("playlists", "Мои плейлисты"), browsable("offline", "Скачанное"))
-                parentId == "favorites" -> runCatching { api.favorites() }.getOrElse { app.local()?.cachedFavorites().orEmpty() }.map(::item)
-                parentId == "offline" -> app.local()?.offline().orEmpty().map(::item)
+                parentId == "favorites" -> runCatching { api.favorites() }.getOrElse { app.local()?.cachedFavorites().orEmpty() }.filter(::allowed).map(::item)
+                parentId == "offline" -> playable(app.local()?.offline().orEmpty()).map(::item)
                 parentId == "playlists" -> api.playlists().map { browsable("playlist:${it.id}", it.name, "${it.songCount} треков") }
-                parentId.startsWith("playlist:") -> api.playlist(parentId.removePrefix("playlist:")).let { list -> list.songs.map { item(it, source = collectionSource("playlist", list.playlist.name)) } }
+                parentId.startsWith("playlist:") -> api.playlist(parentId.removePrefix("playlist:")).let { list -> list.songs.filter(::allowed).map { item(it, source = collectionSource("playlist", list.playlist.name)) } }
                 else -> emptyList()
             }
             LibraryResult.ofItemList(list.drop(page * pageSize).take(pageSize), params)
@@ -372,7 +403,7 @@ class MusicService : MediaLibraryService() {
             if (section != null) return@background LibraryResult.ofItem(section, null)
             val song = app.local()?.cachedSongs()?.find { it.id == mediaId }
                 ?: app.api()?.call("getSong", "id" to mediaId)?.getJSONObject("song")?.let(Song::parse)
-            if (song == null) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItem(item(song), null)
+            if (song == null || !allowed(song)) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItem(item(song), null)
         }
         override fun onAddMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> {
             val profile = app.profileApi(); val store = app.local(); val account = app.credentials.activeId()
@@ -387,7 +418,8 @@ class MusicService : MediaLibraryService() {
                 if (account == null || api == null || account != app.credentials.activeId() || revision != playbackRevision) throw IOException("Очередь устарела")
                 val songs = if (wave) mixSongs(profile ?: throw IOException("Войди в аккаунт"), store ?: throw IOException("Войди в аккаунт"), mode, mood)
                 else mediaItems.mapNotNull { entry ->
-                    entry.mediaMetadata.extras?.getString("song")?.let { runCatching { Song.parse(org.json.JSONObject(it)) }.getOrNull() }
+                    entry.takeIf { controller.uid == applicationInfo.uid }?.let(::songFromItem)
+                        ?: store?.offlineSong(entry.mediaId)
                         ?: entry.requestMetadata.searchQuery?.let { api.songs(it, count = 1).firstOrNull() }
                         ?: runCatching { Song.parse(api.call("getSong", "id" to entry.mediaId).getJSONObject("song")) }.getOrNull()
                 }
@@ -400,7 +432,9 @@ class MusicService : MediaLibraryService() {
                     if (mixActive) player.shuffleModeEnabled = false
                     if (mixActive || player.repeatMode == Player.REPEAT_MODE_ONE) player.repeatMode = Player.REPEAT_MODE_OFF
                     currentMixMode = mode; currentMixMood = mood; mixAccount = if (mixActive) account else null
-                    songs.map { resolve(it, account) }.toMutableList()
+                    val safe = playable(songs)
+                    if (safe.isEmpty() && songs.isNotEmpty()) throw IOException(ContentPolicy.BLOCKED_MESSAGE)
+                    safe.map { resolve(it, account) }.toMutableList()
                 }
             }
         }
@@ -412,7 +446,7 @@ class MusicService : MediaLibraryService() {
         }
         override fun onGetSearchResult(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String,
                                        page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<com.google.common.collect.ImmutableList<MediaItem>>> = background {
-            LibraryResult.ofItemList(app.api()?.songs(query, page * pageSize, pageSize)?.map(::item).orEmpty(), params)
+            LibraryResult.ofItemList(app.api()?.songs(query, page * pageSize, pageSize)?.filter(::allowed)?.map(::item).orEmpty(), params)
         }
     }
 
