@@ -11,6 +11,7 @@ import uuid
 import admin_api
 import audio
 import profile_api as profile
+from content_ratings import Store as RatingStore
 
 UPLOAD=None
 LYRICS=None
@@ -46,10 +47,11 @@ def native_upload(identity,query,chunks,library,staging,validator=None):
 def configure(upload,lyrics):
     global UPLOAD,LYRICS
     UPLOAD,LYRICS=upload,lyrics
+    if lyrics.catalog.ratings is None:lyrics.catalog.ratings=RatingStore(lyrics.folder.parent,lyrics.catalog)
 
 
 def owns(path):
-    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads',profile.PREFIX+'/lyrics-batch') or path.startswith(profile.PREFIX+'/lyrics/') or path.startswith(profile.PREFIX+'/lyrics-align/worker/')
+    return path in (profile.PREFIX+'/capabilities',profile.PREFIX+'/uploads',profile.PREFIX+'/lyrics-batch',profile.PREFIX+'/content-ratings',profile.PREFIX+'/content-ratings/override') or path.startswith(profile.PREFIX+'/lyrics/') or path.startswith(profile.PREFIX+'/lyrics-align/worker/')
 
 
 def dispatch(handler,chunks):
@@ -62,6 +64,14 @@ def dispatch(handler,chunks):
         if UPLOAD is None or LYRICS is None:raise profile.ProfileError(503)
         if handler.command=='GET' and parsed.path==profile.PREFIX+'/capabilities' and not parsed.query:
             result={'schema':1,'uploads':{'mode':'navidrome','path':profile.PREFIX+'/uploads'},'lyrics':True}
+        elif handler.command=='POST' and parsed.path in (profile.PREFIX+'/content-ratings',profile.PREFIX+'/content-ratings/override') and not parsed.query:
+            raw=bytearray()
+            for chunk in chunks(handler.rfile,handler.headers):
+                raw.extend(chunk)
+                if len(raw)>45000:raise profile.ProfileError(413)
+            try:value=json.loads(raw)
+            except (ValueError,UnicodeError):raise profile.ProfileError(400) from None
+            result=LYRICS.catalog.ratings.override(identity,value) if parsed.path.endswith('/override') else LYRICS.catalog.ratings.query(identity['id'],value)
         elif handler.command=='POST' and parsed.path==profile.PREFIX+'/uploads':
             try:values=urllib.parse.parse_qs(parsed.query,keep_blank_values=True,strict_parsing=True)
             except ValueError:raise profile.ProfileError(400) from None

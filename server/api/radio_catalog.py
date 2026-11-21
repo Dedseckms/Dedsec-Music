@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import stat
 import sqlite3
 import time
+from content_ratings import status as rating_status
 
 
 def epoch(value):
@@ -22,9 +23,11 @@ def epoch(value):
 class Catalog:
     def __init__(self,path,roots):
         self.path=Path(path);self.roots={str(key):Path(value).absolute() for key,value in roots.items()}
+        self.ratings=None
         if self.path.is_symlink() or not self.path.is_file():raise ValueError('Physical Nav database required')
         for root in self.roots.values():
             if not root.is_dir() or root.is_symlink() or root.resolve()!=root:raise ValueError('Physical music roots required')
+        with self.db() as db:self.explicit_column='explicit_status' in {row[1] for row in db.execute('PRAGMA table_info(media_file)')}
 
     @contextlib.contextmanager
     def db(self):
@@ -39,6 +42,7 @@ class Catalog:
         with self.db() as db:
             columns='''m.id,m.library_id,m.path,substr(m.title,1,320) AS title,substr(m.artist,1,320) AS artist,
                 m.artist_id,substr(m.album,1,320) AS album,m.album_id,m.has_cover_art,m.duration,m.size,m.suffix,m.missing'''
+            columns+=',m.explicit_status' if self.explicit_column else ",'' AS explicit_status"
             if uid is None:
                 query='SELECT '+columns+',0 AS starred,0 AS play_count,0 AS rating,NULL AS play_date,NULL AS starred_at FROM media_file m WHERE m.missing=0'
                 args=()
@@ -59,7 +63,19 @@ class Catalog:
                 genre_query+=' AND EXISTS(SELECT 1 FROM user_library u WHERE u.library_id=m.library_id AND u.user_id=?)';genre_args=(uid,)
             for song,genre in db.execute(genre_query,genre_args):
                 if song in rows and len(rows[song]['genres'])<20:rows[song]['genres'].append(str(genre)[:120])
+        for row in rows.values():row['explicitStatus']=rating_status(row.get('explicit_status',''))
+        if self.ratings is not None:self.ratings.enrich(rows)
         return rows
+
+    def entries(self,uid,keys):
+        """Bounded current visibility lookup for ratings; unavailable IDs are omitted."""
+        if not keys:return {}
+        explicit='m.explicit_status' if self.explicit_column else "'' AS explicit_status"
+        with self.db() as db:
+            rows=db.execute('SELECT m.id,m.library_id,m.path,'+explicit+''' FROM media_file m
+              WHERE m.missing=0 AND m.id IN ('''+','.join('?' for _ in keys)+''')
+              AND EXISTS(SELECT 1 FROM user_library u WHERE u.library_id=m.library_id AND u.user_id=?)''',(*keys,uid))
+            return {row['id']:dict(row) for row in rows}
 
     def song(self,uid,key):
         """One indexed ID for feedback; never expand the whole metadata/genre catalogue."""
@@ -119,4 +135,6 @@ def dto(song):
         'playCount':max(0,int(song.get('play_count') or 0)),'userRating':max(0,min(5,int(song.get('rating') or 0))),
         'sourceFilename':PurePosixPath(song.get('path') or '').name[:220]}
     if song.get('starred'):result['starred']=str(song.get('starred_at') or 'true')
+    result['explicitStatus']=rating_status(song.get('explicitStatus',song.get('explicit_status','')))
+    result['contentRatingOverride']=song.get('contentRatingOverride') is True
     return result
