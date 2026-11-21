@@ -22,7 +22,11 @@ class PlayRequests {
     @Synchronized fun clear() { pending.clear() }
 }
 
-class QueueWindow(val request: PlayRequest) {
+class QueueWindow(request: PlayRequest) {
+    var request: PlayRequest = request
+        private set
+    /** Refresh metadata without changing the selected occurrence or loaded window. */
+    fun updateSongs(transform: (Song) -> Song) { this.request = this.request.copy(songs = this.request.songs.map(transform)) }
     private var start = (request.selected - 10).coerceAtLeast(0)
     private var end = (start + 40).coerceAtMost(request.songs.size)
     val initial: List<Song> get() = request.songs.subList(start, end)

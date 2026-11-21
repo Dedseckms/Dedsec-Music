@@ -12,6 +12,7 @@ import urllib.parse
 
 import audio
 from import_errors import ImportFailure, check_cancel
+from content_ratings import provider_status
 
 MAX_TRACKS=50_000
 MAX_SECTIONS=2000
@@ -37,7 +38,7 @@ def describe(track):
         'artist':clean(', '.join(clean(getattr(a,'name',''),100) for a in (getattr(track,'artists',None) or [])[:20])),
         'album':clean(getattr(album,'title','')),'albumArtist':clean(', '.join(clean(getattr(a,'name',''),100) for a in (getattr(album,'artists',None) or [])[:20])),
         'genre':clean(getattr(album,'genre',''),100),'durationMs':getattr(track,'duration_ms',None),
-        'available':getattr(track,'available',False) is True}
+        'available':getattr(track,'available',False) is True,'explicitStatus':provider_status(track)}
 
 def remote_url(url,api=False):
     parsed=urllib.parse.urlsplit(url)
@@ -174,7 +175,7 @@ class Provider:
 
 def tag(path,metadata,suffix):
     """Only bounded text tags; images and source URLs are deliberately not copied."""
-    from mutagen.id3 import TIT2,TPE1,TALB,TPE2,TCON
+    from mutagen.id3 import TIT2,TPE1,TALB,TPE2,TCON,TXXX
     from mutagen.mp3 import MP3
     from mutagen.mp4 import MP4
     if suffix=='.mp3':
@@ -182,10 +183,13 @@ def tag(path,metadata,suffix):
         if media.tags is None:media.add_tags()
         for key,frame,value in [('TIT2',TIT2,metadata['title']),('TPE1',TPE1,metadata['artist']),('TALB',TALB,metadata['album']),('TPE2',TPE2,metadata['albumArtist']),('TCON',TCON,metadata['genre'])]:
             if value:media.tags[key]=frame(encoding=3,text=[value])
+        if metadata.get('explicitStatus') in ('explicit','clean'):
+            media.tags.add(TXXX(encoding=3,desc='ITUNESADVISORY',text=['1' if metadata['explicitStatus']=='explicit' else '2']))
         media.save()
     else:
         media=MP4(path)
         for key,value in [('\xa9nam',metadata['title']),('\xa9ART',metadata['artist']),('\xa9alb',metadata['album']),('aART',metadata['albumArtist']),('\xa9gen',metadata['genre'])]:
             if value:media[key]=[value]
+        if metadata.get('explicitStatus') in ('explicit','clean'):media['rtng']=[1 if metadata['explicitStatus']=='explicit' else 2]
         media.save()
     if path.stat().st_size>audio.MAX_BYTES:raise ImportFailure('SOURCE_LIMIT')

@@ -72,7 +72,22 @@ class LocalStore(private val context: Context, val accountId: String) {
         temporary.writeText(value.toString())
         check(temporary.renameTo(destination)) { "Не удалось сохранить данные приложения" }
     }
-    fun cachedSongs(): List<Song> = json("library.json").optJSONArray("songs").objects().map(Song::parse)
+    private fun contentFingerprint(song: Song): String = sha256(JSONArray(listOf(song.size.toString(), song.duration.toString(),
+        song.sourceFilename, song.contentType, song.suffix, song.title, song.artist, song.album, song.albumId, song.artistId)).toString())
+    /** Completed admin mutations outrank stale payloads only for the same recording metadata. */
+    fun contentRatedSong(song: Song): Song = synchronized(lock) {
+        val raw = prefs.getString("content_rating_${sha256(song.id)}", null) ?: return@synchronized song
+        val value = try { JSONObject(raw) } catch (_: Exception) { return@synchronized song }
+        if (song.contentRatingCheckedAt > value.optLong("updatedAt")) {
+            val fresh = JSONObject().put("fingerprint", contentFingerprint(song)).put("rating", song.contentRating.wire)
+                .put("overridden", song.contentRatingOverride).put("updatedAt", song.contentRatingCheckedAt)
+            check(prefs.edit().putString("content_rating_${sha256(song.id)}", fresh.toString()).commit()) { "Не удалось обновить маркировку контента" }
+            return@synchronized song
+        }
+        if (value.optString("fingerprint") != contentFingerprint(song)) return@synchronized song
+        song.copy(contentRating = ContentRating.parse(value.optString("rating")), contentRatingOverride = value.optBoolean("overridden"))
+    }
+    fun cachedSongs(): List<Song> = json("library.json").optJSONArray("songs").objects().map { contentRatedSong(Song.parse(it)) }
     fun cachedArtists(): List<Artist> = json("artists.json").optJSONArray("items").objects().map(Artist::parse)
     fun cacheArtists(items: List<Artist>) = synchronized(lock) { save("artists.json", JSONObject().put("items", JSONArray(items.map {
         JSONObject().put("id", it.id).put("name", it.name).put("coverArt", it.coverArt).put("albumCount", it.albumCount)
@@ -81,16 +96,16 @@ class LocalStore(private val context: Context, val accountId: String) {
     fun cacheGenres(items: List<Genre>) = synchronized(lock) { save("genres.json", JSONObject().put("items", JSONArray(items.map {
         JSONObject().put("value", it.name).put("songCount", it.songCount)
     }))) }
-    fun cacheSongs(songs: List<Song>) = synchronized(lock) { save("library.json", JSONObject().put("songs", JSONArray(songs.distinctBy { it.id }.take(2000).map { it.json() }))) }
-    fun cachedFavorites(): List<Song> = json("favorites.json").optJSONArray("songs").objects().map(Song::parse)
-    fun cacheFavorites(songs: List<Song>) = synchronized(lock) { save("favorites.json", JSONObject().put("songs", JSONArray(songs.distinctBy { it.id }.map { it.json() }))) }
+    fun cacheSongs(songs: List<Song>) = synchronized(lock) { save("library.json", JSONObject().put("songs", JSONArray(songs.distinctBy { it.id }.take(2000).map { contentRatedSong(it).json() }))) }
+    fun cachedFavorites(): List<Song> = json("favorites.json").optJSONArray("songs").objects().map { contentRatedSong(Song.parse(it)) }
+    fun cacheFavorites(songs: List<Song>) = synchronized(lock) { save("favorites.json", JSONObject().put("songs", JSONArray(songs.distinctBy { it.id }.map { contentRatedSong(it).json() }))) }
     fun history(): List<HistoryEntry> = json("history.json").optJSONArray("entries").objects().mapNotNull { value ->
-        try { HistoryEntry(Song.parse(value.getJSONObject("song")), value.getLong("lastPlayed"), value.optInt("count", 1)) } catch (_: Exception) { null }
+        try { HistoryEntry(contentRatedSong(Song.parse(value.getJSONObject("song"))), value.getLong("lastPlayed"), value.optInt("count", 1)) } catch (_: Exception) { null }
     }
     fun record(song: Song) = synchronized(lock) {
         val previous = history()
         val count = (previous.find { it.song.id == song.id }?.count ?: 0) + 1
-        val entries = listOf(HistoryEntry(song, System.currentTimeMillis(), count)) + previous.filterNot { it.song.id == song.id }
+        val entries = listOf(HistoryEntry(contentRatedSong(song), System.currentTimeMillis(), count)) + previous.filterNot { it.song.id == song.id }
         save("history.json", JSONObject().put("entries", JSONArray(entries.take(500).map {
             JSONObject().put("song", it.song.json()).put("lastPlayed", it.lastPlayed).put("count", it.count)
         })))
@@ -107,19 +122,21 @@ class LocalStore(private val context: Context, val accountId: String) {
         if (data.has(id) && data.getBoolean(id) == value) data.remove(id)
         save("favorites-pending.json", data)
     }
+    fun childMode(): Boolean = prefs.getBoolean("child_mode", false)
+    fun childMode(value: Boolean) { prefs.edit().putBoolean("child_mode", value).apply() }
     fun wifiOnly(): Boolean = prefs.getBoolean("wifi_only", true)
     fun offlinePreferences() = OfflinePreferences(prefs.getBoolean("auto_listened", false), prefs.getBoolean("auto_favorites", false))
     fun offlinePreferences(value: OfflinePreferences) { prefs.edit().putBoolean("auto_listened", value.afterListen).putBoolean("auto_favorites", value.onFavorite).apply() }
     private fun queueDirectory() = File(directory, "download-queue").apply { mkdirs() }
     fun pendingDownloads(): List<Song> = queueDirectory().listFiles().orEmpty().filter { it.extension == "json" }.mapNotNull {
-        try { Song.parse(JSONObject(it.readText())) } catch (_: Exception) { null }
+        try { contentRatedSong(Song.parse(JSONObject(it.readText()))) } catch (_: Exception) { null }
     }
     fun queueDownload(song: Song) = synchronized(lock) {
         val folder = queueDirectory()
         val file = File(folder, "${sha256(song.id)}.json")
         if (!file.isFile) {
             val temp = File.createTempFile("queue-", ".tmp", folder)
-            try { temp.writeText(song.json().toString()); check(temp.renameTo(file)) } finally { temp.delete() }
+            try { temp.writeText(contentRatedSong(song).json().toString()); check(temp.renameTo(file)) } finally { temp.delete() }
         }
     }
     fun finishDownload(id: String) = synchronized(lock) { File(queueDirectory(), "${sha256(id)}.json").delete(); Unit }
@@ -129,7 +146,7 @@ class LocalStore(private val context: Context, val accountId: String) {
     fun audioFile(id: String): File = File(directory, "offline/${sha256(id)}.audio").also { it.parentFile?.mkdirs() }
     private fun offlineIndex() = File(directory, "offline-index").apply { mkdirs() }
     private fun offlineRecord(value: JSONObject): Song? {
-        val song = try { Song.parse(value.getJSONObject("song")) } catch (_: Exception) { return null }
+        val song = try { contentRatedSong(Song.parse(value.getJSONObject("song"))) } catch (_: Exception) { return null }
         val file = audioFile(song.id)
         return song.takeIf { file.isFile && file.length() > 0 && file.length() == value.optLong("bytes") }
     }
@@ -144,9 +161,39 @@ class LocalStore(private val context: Context, val accountId: String) {
     fun downloaded(song: Song, bytes: Long) = synchronized(lock) {
         val temp = File.createTempFile("offline-", ".tmp", offlineIndex())
         try {
-            temp.writeText(JSONObject().put("song", song.json()).put("bytes", bytes).toString())
+            temp.writeText(JSONObject().put("song", contentRatedSong(song).json()).put("bytes", bytes).toString())
             check(temp.renameTo(File(offlineIndex(), "${sha256(song.id)}.json")))
         } finally { temp.delete() }
+    }
+    /** Refresh cached metadata without touching any published audio file. */
+    fun updateContentRating(song: Song, rating: ContentRating, overridden: Boolean) = synchronized(lock) {
+        val id = song.id
+        val snapshot = JSONObject().put("fingerprint", contentFingerprint(song)).put("rating", rating.wire).put("overridden", overridden)
+            .put("updatedAt", System.currentTimeMillis())
+        check(prefs.edit().putString("content_rating_${sha256(id)}", snapshot.toString()).commit()) {
+            "Не удалось сохранить маркировку контента"
+        }
+        fun update(value: Any?) {
+            when (value) {
+                is JSONObject -> {
+                    if (value.optString("id") == id && value.has("title") && contentFingerprint(Song.parse(value)) == contentFingerprint(song)) {
+                        value.put("explicitStatus", rating.wire).put("contentRatingOverride", overridden)
+                    }
+                    value.keys().asSequence().toList().forEach { update(value.opt(it)) }
+                }
+                is JSONArray -> for (index in 0 until value.length()) update(value.opt(index))
+            }
+        }
+        val files = listOf("library.json", "favorites.json", "history.json", "offline.json").map { File(directory, it) } +
+            offlineIndex().listFiles().orEmpty().filter { it.extension == "json" } +
+            queueDirectory().listFiles().orEmpty().filter { it.extension == "json" }
+        for (file in files.filter(File::isFile)) {
+            val value = try { JSONObject(file.readText()) } catch (_: Exception) { continue }
+            update(value)
+            val temporary = File.createTempFile("rating-", ".tmp", file.parentFile)
+            try { temporary.writeText(value.toString()); check(temporary.renameTo(file)) { "Не удалось обновить маркировку в кэше" } }
+            finally { temporary.delete() }
+        }
     }
     fun removeDownload(id: String) = synchronized(lock) {
         val file = audioFile(id)

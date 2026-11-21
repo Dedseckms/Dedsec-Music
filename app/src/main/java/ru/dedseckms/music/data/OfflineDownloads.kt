@@ -27,6 +27,7 @@ object OfflineDownloads {
         for (song in songs.distinctBy(Song::id)) {
             currentCoroutineContext().ensureActive()
             if (CredentialStore(context).activeId() != account) break
+            if (!ContentPolicy.allowed(store.contentRatedSong(song), store.childMode())) continue
             if (song.id in offline || song.id in active) continue
             store.queueDownload(song)
             manager.enqueueUniqueWork("offline-$account-${sha256(song.id)}", ExistingWorkPolicy.KEEP, request(account, song, store.wifiOnly())).result.get()
@@ -49,6 +50,7 @@ object OfflineDownloads {
             val song = known[id] ?: try { Song.parse(NavApi(credentials).call("getSong", "id" to id).getJSONObject("song")) }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
                 catch (_: Exception) { unresolved++; continue }
+            if (!ContentPolicy.allowed(store.contentRatedSong(song), store.childMode())) { manager.cancelWorkById(entry.id); store.finishDownload(song.id); continue }
             store.queueDownload(song)
             manager.updateWork(request(account, song, store.wifiOnly(), entry.id)).get()
         }

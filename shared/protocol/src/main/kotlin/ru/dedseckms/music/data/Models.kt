@@ -23,12 +23,17 @@ data class Song(
     val starred: Boolean = false, val playCount: Int = 0, val rating: Int = 0,
     val sourceFilename: String = "",
     val genres: List<String> = emptyList(),
+    val contentRating: ContentRating = ContentRating.UNKNOWN,
+    val contentRatingOverride: Boolean = false,
+    /** Local request-start receipt; deliberately omitted from persisted song JSON. */
+    val contentRatingCheckedAt: Long = 0,
 ) {
     fun json() = JSONObject().put("id", id).put("title", title).put("artist", artist)
         .put("album", album).put("albumId", albumId).put("artistId", artistId).put("coverArt", coverArt)
         .put("duration", duration).put("genre", genre).put("suffix", suffix).put("contentType", contentType)
         .put("size", size).put("starred", if (starred) "true" else "").put("playCount", playCount).put("userRating", rating).put("sourceFilename", sourceFilename)
         .put("genres", JSONArray(genres.map { JSONObject().put("name", it) }))
+        .put("explicitStatus", contentRating.wire).put("contentRatingOverride", contentRatingOverride)
 
     companion object {
         fun parse(value: JSONObject) = Song(
@@ -42,6 +47,9 @@ data class Song(
             rating = value.optInt("userRating"),
             sourceFilename = value.optString("sourceFilename", value.optString("path")).substringAfterLast('/').substringAfterLast('\\'),
             genres = value.optJSONArray("genres").objects().map { it.optString("name") }.filter(String::isNotBlank).distinct(),
+            contentRating = ContentRating.parse(value.optString("explicitStatus")),
+            contentRatingOverride = value.optBoolean("contentRatingOverride", false),
+            contentRatingCheckedAt = value.optLong("_dedsecRatingCheckedAt"),
         )
     }
 }

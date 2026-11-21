@@ -17,6 +17,7 @@ import profile_api as profile
 from radio_catalog import Catalog,dto,epoch
 from radio_features import Index
 from radio_neural import Cache as NeuralCache,affinity,WORKER_ROUTE
+from content_ratings import Store as RatingStore
 
 PREFIX='/dedsec/profile/v1/radio/'
 MOODS={'ANY','ENERGY','CHILL','FOCUS','WORKOUT','PARTY','SAD','HAPPY'}
@@ -37,7 +38,9 @@ def integer(value,low,high):return type(value) is int and low<=value<=high
 
 
 def request_mix(value):
-    if not isinstance(value,dict) or set(value)-{'mood','mode','size','history','dislikedIds','excludeIds'}:raise Rejected(400)
+    if not isinstance(value,dict) or set(value)-{'mood','mode','size','history','dislikedIds','excludeIds','childMode'}:raise Rejected(400)
+    child=value.get('childMode',False)
+    if type(child) is not bool:raise Rejected(400)
     mood=value.get('mood','ANY');mode=value.get('mode','BALANCED');size=value.get('size',40)
     if not isinstance(mood,str) or mood not in MOODS or not isinstance(mode,str) or mode not in MODES or not integer(size,1,60):raise Rejected(400)
     history=value.get('history',[]);disliked=value.get('dislikedIds',[]);excluded=value.get('excludeIds',[])
@@ -47,7 +50,7 @@ def request_mix(value):
     for item in history:
         if (not isinstance(item,dict) or set(item)!={'id','playedAt','count'} or not identifier(item['id'])
                 or not integer(item['playedAt'],0,stamp+300_000) or not integer(item['count'],0,100_000)):raise Rejected(400)
-    return {'mood':mood,'mode':mode,'size':size,'history':history,'dislikedIds':disliked,'excludeIds':excluded}
+    return {'mood':mood,'mode':mode,'size':size,'history':history,'dislikedIds':disliked,'excludeIds':excluded,'childMode':child}
 
 
 def vector(features):
@@ -114,7 +117,9 @@ class Engine:
         finally:self.mix_slot.release()
 
     def _mix(self,uid,request):
-        songs=self.catalog.songs(uid);features=self.index.available(songs);now=int(time.time()*1000)
+        songs=self.catalog.songs(uid)
+        if request.get('childMode'):songs={key:song for key,song in songs.items() if song.get('explicitStatus')=='clean'}
+        features=self.index.available(songs);now=int(time.time()*1000)
         with self.db() as db:
             feedback={row['id']:dict(row) for row in db.execute('SELECT * FROM feedback WHERE uid=?',(uid,))}
             served={row['id']:row['at'] for row in db.execute('SELECT id,at FROM served WHERE uid=? AND at>?',(uid,now-21600_000))}
@@ -221,6 +226,7 @@ def configure(database,roots,state,slot=None,start=True):
     with INIT_LOCK:
         if ENGINE is not None:return ENGINE
         catalog=Catalog(database,roots);folder=Path(state)/'radio';folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+        catalog.ratings=RatingStore(state,catalog)
         index=Index(folder,catalog,slot,start=start);ENGINE=Engine(catalog,index,folder);return ENGINE
 
 

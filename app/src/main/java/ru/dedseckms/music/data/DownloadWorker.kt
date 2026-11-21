@@ -24,6 +24,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         val credentials = CredentialStore(applicationContext).load(account) ?: return@withContext Result.failure()
         val song = try { Song.parse(JSONObject(inputData.getString("song") ?: "")) } catch (_: Exception) { return@withContext Result.failure() }
         val store = LocalStore(applicationContext, account)
+        if (!ContentPolicy.allowed(store.contentRatedSong(song), store.childMode())) { store.finishDownload(song.id); return@withContext Result.failure(workDataOf("error" to ContentPolicy.BLOCKED_MESSAGE)) }
         val existing = store.audioFile(song.id)
         if (existing.isFile && existing.length() > 0) { store.downloaded(song, existing.length()); store.finishDownload(song.id); return@withContext Result.success() }
         val destination = store.audioFile(song.id)
@@ -48,6 +49,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
                         currentCoroutineContext().ensureActive()
+                        if (!ContentPolicy.allowed(store.contentRatedSong(song), store.childMode())) { store.finishDownload(song.id); return@withContext Result.failure(workDataOf("error" to ContentPolicy.BLOCKED_MESSAGE)) }
                         if (isStopped || CredentialStore(applicationContext).activeId() != account) throw CancellationException()
                         if (store.wifiOnly() && applicationContext.getSystemService(android.net.ConnectivityManager::class.java).isActiveNetworkMetered) return@withContext Result.retry()
                         val count = source.read(buffer)
@@ -69,6 +71,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
                     if (song.duration > 0 && kotlin.math.abs(duration - song.duration * 1000L) > maxOf(3000L, song.duration * 30L)) throw IOException("Audio duration mismatch")
                 } finally { reader.release() }
                 currentCoroutineContext().ensureActive()
+                        if (!ContentPolicy.allowed(store.contentRatedSong(song), store.childMode())) { store.finishDownload(song.id); return@withContext Result.failure(workDataOf("error" to ContentPolicy.BLOCKED_MESSAGE)) }
                         if (isStopped || CredentialStore(applicationContext).activeId() != account) throw CancellationException()
                         if (store.wifiOnly() && applicationContext.getSystemService(android.net.ConnectivityManager::class.java).isActiveNetworkMetered) return@withContext Result.retry()
                 check(temporary.renameTo(destination))

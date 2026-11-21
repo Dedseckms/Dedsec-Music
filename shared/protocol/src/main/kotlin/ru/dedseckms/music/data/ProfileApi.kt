@@ -13,6 +13,8 @@ import kotlinx.coroutines.*
 import okio.buffer
 import java.util.concurrent.TimeUnit
 
+internal class ContentRatingsUnavailable(val unsupported: Boolean) : IOException("Маркировка треков пока недоступна")
+
 data class AccountProfile(val userId: String, val avatarVersion: String, val librarySongCount: Int, val isAdmin: Boolean = false)
 
 /** Native Navidrome tokens stay in memory and are sent only to the configured music origin. */
@@ -39,7 +41,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
     private fun execute(request: Request, upload: Boolean = false): Response {
         if (cancelled) throw CancellationException("Profile request cancelled")
         val call = (if (upload) client.newBuilder().retryOnConnectionFailure(false).build() else client).newCall(request)
-        call.timeout().timeout(if (upload) 600 else 12, TimeUnit.SECONDS)
+        call.timeout().timeout(if (upload) 600_000 else minOf(12_000, client.callTimeoutMillis.takeIf { it > 0 } ?: 12_000).toLong(), TimeUnit.MILLISECONDS)
         pending += call
         if (cancelled) call.cancel()
         try {
@@ -94,6 +96,44 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         val value = JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8))
         value.optInt("schema") == 1 && value.optJSONObject("uploads")?.optString("mode") == "navidrome" &&
             value.optJSONObject("uploads")?.optString("path") == "/dedsec/profile/v1/uploads"
+    }
+    /** Optional metadata only; authorization remains bound to the configured music origin. */
+    internal fun contentRatings(ids: List<String>): ContentRatingBatch {
+        require(ids.size <= 500 && ids.all { it.matches(Regex("[A-Za-z0-9_-]{1,80}")) })
+        val wanted = ids.toSet()
+        val body = JSONObject().put("ids", JSONArray(ids.distinct())).toString().toRequestBody("application/json".toMediaType())
+        return authorized { request("content-ratings", it).post(body).build() }.use {
+            if (!it.isSuccessful) throw ContentRatingsUnavailable(it.code in setOf(404, 405))
+            parseContentRatings(JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)), wanted)
+
+        }
+    }
+    private fun parseContentRatings(data: JSONObject, wanted: Set<String>): ContentRatingBatch {
+        fun values(key: String): Map<String, ContentRating> {
+            val raw = data.optJSONObject(key) ?: return emptyMap()
+            return raw.keys().asSequence().filter { it in wanted }.mapNotNull { id ->
+                ContentRating.parse(raw.optString(id)).takeUnless { it == ContentRating.UNKNOWN }?.let { id to it }
+            }.toMap()
+        }
+        require(data.has("ratings"))
+        val ratings = values("ratings"); val overrides = values("overrides")
+        if (overrides.any { (id, rating) -> ratings[id] != rating }) throw IOException("Противоречивая маркировка треков")
+        return ContentRatingBatch(ratings, overrides)
+    }
+    /** Null restores source metadata; only a server administrator may create an override. */
+    fun setContentRating(id: String, rating: ContentRating?): ContentRatingUpdate {
+        require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")) && rating != ContentRating.UNKNOWN)
+        val body = JSONObject().put("id", id).put("status", rating?.wire ?: "source").toString().toRequestBody("application/json".toMediaType())
+        return authorized { request("content-ratings/override", it).post(body).build() }.use {
+            if (!it.isSuccessful) throw IOException(when (it.code) {
+                403 -> "Менять маркировку может только администратор сервера"
+                404, 405 -> "Для ручной маркировки нужно обновить сервер"
+                409 -> "Аудиофайл изменился. Обнови трек и повтори"
+                else -> "Не удалось сохранить маркировку"
+            })
+            val data = parseContentRatings(JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)), setOf(id))
+            ContentRatingUpdate(data.ratings[id] ?: ContentRating.UNKNOWN, id in data.overrides)
+        }
     }
     fun lyrics(id: String): JSONObject {
         require(id.isNotBlank() && id.length <= 128 && id.none { it == '/' || it == '\\' || it.code < 32 } && id !in setOf(".", ".."))
@@ -246,7 +286,7 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         }
     }
     fun radio(mode: MixMode, mood: MixMood, history: List<HistoryEntry> = emptyList(), disliked: Set<String> = emptySet(),
-              exclude: List<String> = emptyList(), size: Int = 40): RadioMix {
+              exclude: List<String> = emptyList(), size: Int = 40, childMode: Boolean = false): RadioMix {
         val recent = JSONArray()
         var historyBytes = 0
         history.sortedByDescending { it.lastPlayed }.take(200).forEach {
@@ -264,11 +304,11 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
         }
         val data = radioRequest("mix", JSONObject().put("mode", mode.name).put("mood", mood.name).put("size", size.coerceIn(1, 60))
             .put("history", recent).put("dislikedIds", ids(disliked.take(1000), 24000))
-            .put("excludeIds", ids(exclude.takeLast(100), 6000)))
+            .put("excludeIds", ids(exclude.takeLast(100), 6000)).put("childMode", childMode))
         val tracks = data.getJSONArray("songs")
         if (tracks.length() > 60) throw IOException("Слишком большой микс")
         val analysis = data.optJSONObject("analysis")
-        return RadioMix((0 until tracks.length()).map { Song.parse(tracks.getJSONObject(it)) },
+        return RadioMix((0 until tracks.length()).map { Song.parse(tracks.getJSONObject(it)) }.filter { ContentPolicy.allowed(it, childMode) },
             analysis?.optInt("indexed") ?: 0, analysis?.optInt("total") ?: 0, data.optString("reason").takeUnless { it.isBlank() || it == "null" })
     }
     fun radioEvent(id: String, kind: String, positionMs: Long, durationMs: Long) {

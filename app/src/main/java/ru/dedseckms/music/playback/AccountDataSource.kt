@@ -16,6 +16,9 @@ import ru.dedseckms.music.data.NavApi
 class AccountDataSource(private val app: MusicApp) : DataSource {
     private var delegate: DataSource? = null
     private var publicUri: Uri? = null
+    private var accountId: String? = null
+    private var sourceStore: LocalStore? = null
+    private var sourceSong: ru.dedseckms.music.data.Song? = null
     private val listeners = mutableListOf<TransferListener>()
     override fun addTransferListener(transferListener: TransferListener) { listeners += transferListener }
     override fun open(dataSpec: DataSpec): Long {
@@ -23,6 +26,11 @@ class AccountDataSource(private val app: MusicApp) : DataSource {
         if (dataSpec.uri.scheme != "dedsec" || dataSpec.uri.host != credentials.accountId) throw IOException("Аккаунт воспроизведения изменился")
         val id = dataSpec.uri.lastPathSegment ?: throw IOException("Нет идентификатора трека")
         val store = LocalStore(app, credentials.accountId)
+        val song = (app.playbackSongs["${credentials.accountId}:$id"] ?: store.offlineSong(id))?.let(store::contentRatedSong)
+        if (store.childMode() && (song == null || !ru.dedseckms.music.data.ContentPolicy.allowed(song, true))) {
+            throw IOException(ru.dedseckms.music.data.ContentPolicy.BLOCKED_MESSAGE)
+        }
+        accountId = credentials.accountId; sourceSong = song; sourceStore = store
         // Published audio files are atomically renamed only after validation. No full-library scan here.
         val localAudio = store.audioFile(id)
         val offline = localAudio.isFile && localAudio.length() > 0
@@ -41,9 +49,14 @@ class AccountDataSource(private val app: MusicApp) : DataSource {
         catch (_: IOException) { runCatching { source.close() }; throw IOException("Трек недоступен. Проверь подключение или офлайн-копию") }
     }
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int = try {
+        val account = accountId ?: throw IOException("Источник закрыт")
+        if (app.credentials.activeId() != account) throw IOException("Аккаунт изменился")
+        if (sourceStore?.childMode() == true && sourceSong?.let { ru.dedseckms.music.data.ContentPolicy.allowed(sourceStore?.contentRatedSong(it) ?: it, true) } != true) {
+            throw IOException(ru.dedseckms.music.data.ContentPolicy.BLOCKED_MESSAGE)
+        }
         delegate?.read(buffer, offset, length) ?: throw IOException("Источник закрыт")
     } catch (_: IOException) { throw IOException("Передача аудио прервана") }
     override fun getUri(): Uri? = publicUri
     override fun getResponseHeaders(): Map<String, List<String>> = delegate?.responseHeaders.orEmpty()
-    override fun close() { try { delegate?.close() } finally { delegate = null; publicUri = null } }
+    override fun close() { try { delegate?.close() } finally { delegate = null; publicUri = null; accountId = null; sourceSong = null; sourceStore = null } }
 }

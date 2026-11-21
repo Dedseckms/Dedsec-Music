@@ -13,14 +13,14 @@ class RadioProtocolTest {
     @Test fun moodModeHistoryAndExclusionsReachTheAuthenticatedServer() {
         MockWebServer().use { server ->
             login(server)
-            server.enqueue(MockResponse().setBody("""{"songs":[{"id":"chosen","title":"Song","artist":"Artist"}],"analysis":{"indexed":19,"total":100},"reason":null}"""))
+            server.enqueue(MockResponse().setBody("""{"songs":[{"id":"chosen","title":"Song","artist":"Artist","explicitStatus":"clean"}],"analysis":{"indexed":19,"total":100},"reason":null}"""))
             val mix = api(server).radio(MixMode.DISCOVERY, MixMood.CHILL,
-                listOf(HistoryEntry(Song("recent", "Title", "Artist"), 123456789, 3)), setOf("disliked"), listOf("current"))
+                listOf(HistoryEntry(Song("recent", "Title", "Artist"), 123456789, 3)), setOf("disliked"), listOf("current"), childMode = true)
             server.takeRequest()
             val request = server.takeRequest(); val json = JSONObject(request.body.readUtf8())
             assertEquals("/dedsec/profile/v1/radio/mix", request.path)
             assertEquals("POST", request.method); assertEquals("Bearer radio-test", request.getHeader("Authorization"))
-            assertEquals("CHILL", json.getString("mood")); assertEquals("DISCOVERY", json.getString("mode"))
+            assertEquals("CHILL", json.getString("mood")); assertEquals("DISCOVERY", json.getString("mode")); assertTrue(json.getBoolean("childMode"))
             assertEquals("recent", json.getJSONArray("history").getJSONObject(0).getString("id"))
             assertEquals("current", json.getJSONArray("excludeIds").getString(0))
             assertEquals("disliked", json.getJSONArray("dislikedIds").getString(0))

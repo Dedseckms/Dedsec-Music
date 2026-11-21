@@ -42,7 +42,7 @@ import ru.dedseckms.music.data.*
             if (showSongs && s.search.songs.isNotEmpty()) {
                 item { Section("Треки") }
                 itemsIndexed(s.search.songs, key = { index, song -> "song:$index:${song.id}" }) { index, song ->
-                    TrackRow(song, index, s, { c.rememberQuery(); c.play(s.search.songs, index, "Поиск · ${s.query}") }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null)
+                    TrackRow(song, index, s, { c.rememberQuery(); c.play(s.search.songs, index, "Поиск · ${s.query}") }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null, if (s.isAdmin) ({ rating -> c.setContentRating(song, rating) }) else null)
                 }
             }
             if (showGenres && matchingGenres.isNotEmpty()) {

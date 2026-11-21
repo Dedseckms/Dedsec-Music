@@ -35,6 +35,8 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 @Composable internal fun FullPlayer(state: AppState, vm: MusicViewModel, addToPlaylist: (Song) -> Unit = {}, dismiss: () -> Unit) {
     val song = state.now ?: return
     var queue by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    var rating by remember(song.id) { mutableStateOf(false) }
     var lyrics by remember { mutableStateOf(false) }
     var lyricsScrolled by remember(song.id) { mutableStateOf(false) }
     val queueMatches = state.coverQueue.any { it.queueIndex == state.queueIndex && it.song.id == song.id }
@@ -56,6 +58,13 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
                             Text(state.playbackSource, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         IconButton({ queue = true }) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь воспроизведения") }
+                        if (state.isAdmin) Box {
+                            IconButton({ more = true }) { Icon(Icons.Rounded.MoreVert, "Действия с треком") }
+                            DropdownMenu(more, { more = false }) {
+                                DropdownMenuItem(text = { Text("Маркировка контента") }, leadingIcon = { Icon(Icons.Rounded.Label, null) },
+                                    onClick = { more = false; rating = true }, enabled = !state.contentRatingBusy)
+                            }
+                        }
                     }
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                         val coverSide = minOf(maxWidth, (maxHeight - (112 * fontScale).dp).coerceAtLeast(0.dp))
@@ -77,6 +86,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
+                                    ExplicitBadge(song)
                                     Text(song.title, style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     Text(song.artist, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp).clickable { vm.openArtist(song); dismiss() })
@@ -129,6 +139,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
                 }
             }
         }
+        if (rating && state.isAdmin) ContentRatingDialog(song, state.contentRatingBusy, { value -> vm.setContentRating(song, value); rating = false }, { rating = false })
         if (queue) ModalBottomSheet({ queue = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
                 item { Text("Очередь воспроизведения", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp)) }

@@ -109,11 +109,14 @@ class DesktopAudio(private val scope: CoroutineScope, private val ended: () -> U
             }
         }
     }
-    suspend fun prepareNext(key: String, uri: String) = withContext(audioThread) {
-        if (closed || active == null) return@withContext
-        if (next?.key == key || spare?.key == key && (spare?.ready == true || spare?.warming == true)) return@withContext
-        next = Next(key, uri)
-        if (fade == null) warmNext()
+    suspend fun prepareNext(key: String, uri: String) {
+        val version = generation
+        withContext(audioThread) {
+            if (closed || version != generation || active == null) return@withContext
+            if (next?.key == key || spare?.key == key && (spare?.ready == true || spare?.warming == true)) return@withContext
+            next = Next(key, uri)
+            if (fade == null) warmNext()
+        }
     }
     private fun warmNext() {
         val target = next ?: return; val slot = spare ?: return
@@ -166,7 +169,8 @@ class DesktopAudio(private val scope: CoroutineScope, private val ended: () -> U
         val value = (desiredVolume * gain * 100).toInt().coerceIn(0, 100)
         if (slot.volume != value) { slot.player.audio().setVolume(value); slot.volume = value }
     }
-    fun toggle() { scope.launch(audioThread) {
+    fun toggle() { val version = generation; scope.launch(audioThread) {
+        if (closed || version != generation) return@launch
         val current = active ?: return@launch
         if (suspendedAt == 0L && (current.player.status().isPlaying || fade != null)) {
             suspendedAt = System.nanoTime(); current.player.controls().setPause(true); fade?.let { it.from.player.controls().setPause(true); it.to.player.controls().setPause(true) }
