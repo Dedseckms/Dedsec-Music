@@ -30,7 +30,7 @@ class ContentRatingsProtocolTest {
             assertEquals("/dedsec/profile/v1/content-ratings", request.path)
             assertEquals("Bearer test", request.getHeader("Authorization"))
             val ids = JSONObject(request.body.readUtf8()).getJSONArray("ids")
-            assertEquals(4, ids.length())
+            assertEquals(5, ids.length())
             ratings.enrich(root()); assertEquals(2, server.requestCount)
         }
     }
@@ -43,6 +43,7 @@ class ContentRatingsProtocolTest {
             val song = Song.parse(data.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(0))
             assertEquals(ContentRating.UNKNOWN, song.contentRating)
             assertFalse(ContentPolicy.allowed(song, true)); assertEquals(2, server.requestCount)
+            assertEquals(ContentRating.CLEAN, Song.parse(data.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(4)).contentRating)
         }
     }
     @Test fun childRadioRejectsUnsafeSongsEvenWhenOldServerIgnoresFlag() {
@@ -53,4 +54,56 @@ class ContentRatingsProtocolTest {
             assertEquals(listOf("c"), api.radio(MixMode.BALANCED, MixMood.ANY, childMode = true).songs.map(Song::id))
         }
     }
+    @Test fun unconfirmedEntriesBeyond500And1000FailClosed() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{"clean0":"clean"}}"""))
+            val ratings = ContentRatings(Credentials(server.url("/").toString(), "u", "p"), NavApi.httpClient(), true)
+            val songs = JSONArray()
+            repeat(1002) { songs.put(JSONObject().put("id", "clean$it").put("title", "S").put("explicitStatus", "clean")) }
+            ratings.enrich(JSONObject().put("playlist", JSONObject().put("entry", songs)))
+            assertTrue(ContentPolicy.allowed(Song.parse(songs.getJSONObject(0)), true))
+            for (index in listOf(500, 1000, 1001)) assertFalse(ContentPolicy.allowed(Song.parse(songs.getJSONObject(index)), true))
+            server.takeRequest()
+            assertEquals(500, JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("ids").length())
+        }
+    }
+    @Test fun timeoutDoesNotConfirmNativeClean() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{"conflict":"clean"}}""").setBodyDelay(3, java.util.concurrent.TimeUnit.SECONDS))
+            val ratings = ContentRatings(Credentials(server.url("/").toString(), "u", "p"), NavApi.httpClient(), true)
+            val data = root(); ratings.enrich(data)
+            assertEquals(ContentRating.UNKNOWN, Song.parse(data.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(4)).contentRating)
+        }
+    }
+    @Test fun trustedAdministratorOverrideCanClearNativeExplicitOrMarkUnknown() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{"native":"clean","unknown":"explicit"},"overrides":{"native":"clean","unknown":"explicit"}}"""))
+            val ratings = ContentRatings(Credentials(server.url("/").toString(), "u", "p"), NavApi.httpClient(), true)
+            val data = root(); ratings.enrich(data)
+            val songs = data.getJSONObject("searchResult3").getJSONArray("song")
+            val clean = Song.parse(songs.getJSONObject(3)); val adult = Song.parse(songs.getJSONObject(2))
+            assertTrue(clean.contentRatingOverride); assertTrue(ContentPolicy.allowed(clean, true))
+            assertTrue(adult.contentRatingOverride); assertEquals(ContentRating.EXPLICIT, adult.contentRating)
+            assertTrue(Song.parse(clean.json()).contentRatingOverride)
+        }
+    }
+    @Test fun overrideMutationUsesFixedAuthenticatedEndpointAndResetIsExplicit() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{"s":"explicit"},"overrides":{"s":"explicit"}}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{},"overrides":{}}"""))
+            val api = ProfileApi(Credentials(server.url("/").toString(), "u", "p"), allowLocalHttpForTests = true)
+            assertEquals(ContentRatingUpdate(ContentRating.EXPLICIT, true), api.setContentRating("s", ContentRating.EXPLICIT))
+            assertEquals(ContentRatingUpdate(ContentRating.UNKNOWN, false), api.setContentRating("s", null))
+            server.takeRequest()
+            val set = server.takeRequest(); val reset = server.takeRequest()
+            assertEquals("/dedsec/profile/v1/content-ratings/override", set.path)
+            assertEquals("Bearer test", set.getHeader("Authorization"))
+            assertEquals("source", JSONObject(reset.body.readUtf8()).getString("status"))
+        }
+    }
+
 }
