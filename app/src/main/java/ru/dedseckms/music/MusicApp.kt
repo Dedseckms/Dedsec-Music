@@ -8,6 +8,7 @@ import ru.dedseckms.music.data.NavApi
 class MusicApp : Application() {
     val playRequests = ru.dedseckms.music.data.PlayRequests()
     val accountChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val contentRatingChanges = kotlinx.coroutines.flow.MutableSharedFlow<Pair<String, ru.dedseckms.music.data.Song>>(extraBufferCapacity = 16)
     val contentPolicyChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val playbackSongs = java.util.concurrent.ConcurrentHashMap<String, ru.dedseckms.music.data.Song>()
     val volumeChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)

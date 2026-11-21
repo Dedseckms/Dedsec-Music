@@ -64,6 +64,7 @@ data class AppState(
     val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false, val isAdmin: Boolean = false,
     val libraryTotal: Int? = null,
     val autoOffline: OfflinePreferences = OfflinePreferences(), val downloadQueueBusy: Boolean = false,
+    val contentRatingBusy: Boolean = false,
     val childMode: Boolean = false,
     val wifiOnly: Boolean = true, val theme: String = "system", val dynamicColor: Boolean = true,
 )
@@ -680,6 +681,51 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { if (revision == generation) toast("Не удалось добавить загрузки в очередь") }
             finally { if (revision == generation) mutable.update { it.copy(downloadQueueBusy = false) } }
+        }
+    }
+    fun setContentRating(song: Song, rating: ContentRating?) {
+        if (!state.value.isAdmin || state.value.contentRatingBusy) return
+        val profile = app.profileApi() ?: return
+        val store = local() ?: return
+        val revision = generation
+        val account = app.credentials.activeId() ?: return
+        mutable.update { it.copy(contentRatingBusy = true) }
+        viewModelScope.launch {
+            try {
+                val result = profile.await { setContentRating(song.id, rating) }
+                if (revision != generation || app.credentials.activeId() != account) return@launch
+                fun updated(value: Song): Song = if (value.id == song.id) value.copy(contentRating = result.rating, contentRatingOverride = result.overridden) else value
+                fun updatedList(value: List<Song>) = value.map(::updated)
+                val changed = updated(song)
+                app.api()?.invalidateContentRating(song.id)
+                app.playbackSongs["$account:${song.id}"] = changed
+                app.playRequests.clear()
+                requestedSong = requestedSong?.let(::updated)
+                tabDestinations.replaceAll { _, destination -> destination.copy(
+                    page = destination.page?.let { it.copy(songs = updatedList(it.songs)) },
+                    artist = destination.artist?.let { it.copy(songs = updatedList(it.songs)) }) }
+                mutable.update { current -> current.copy(
+                    songs = updatedList(current.songs), favorites = updatedList(current.favorites), offline = updatedList(current.offline),
+                    search = updatedList(current.search), history = current.history.map { it.copy(song = updated(it.song)) },
+                    page = current.page?.let { it.copy(songs = updatedList(it.songs)) },
+                    artistPage = current.artistPage?.let { it.copy(songs = updatedList(it.songs)) },
+                    now = current.now?.let(::updated), queue = updatedList(current.queue),
+                    coverQueue = current.coverQueue.map { it.copy(song = updated(it.song)) },
+                    downloads = current.downloads.mapValues { (_, transfer) -> transfer.copy(indexedSong = transfer.indexedSong?.let(::updated)) },
+                    uploads = current.uploads.map { it.copy(indexedSong = it.indexedSong?.let(::updated)) }) }
+                if (state.value.childMode) childMode(true) else app.contentRatingChanges.emit(account to changed)
+                withContext(Dispatchers.IO) {
+                    store.updateContentRating(song.id, result.rating, result.overridden)
+                    if (!ContentPolicy.allowed(changed, store.childMode())) {
+                        work.getWorkInfosByTag("downloads-$account").get().filter { "track:${song.id}" in it.tags && !it.state.isFinished }
+                            .forEach { work.cancelWorkById(it.id).result.get() }
+                        store.finishDownload(song.id)
+                    }
+                }
+                if (revision == generation) toast("Маркировка контента обновлена")
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { if (revision == generation) toast(safeMessage(error)) }
+            finally { if (revision == generation) mutable.update { it.copy(contentRatingBusy = false) } }
         }
     }
     fun childMode(enabled: Boolean) {
