@@ -31,6 +31,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -391,6 +393,7 @@ internal fun Artwork(coverArt: String, seed: String, modifier: Modifier = Modifi
 
 @Composable
 internal fun SongRow(song: Song, state: AppState, play: () -> Unit, menu: () -> Unit) {
+    val blocked = !ContentPolicy.allowed(song, state.childMode)
     val active = state.now?.id == song.id
     val background by animateColorAsState(if (active) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .55f) else Color.Transparent, label = "active")
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(background).clickable(onClick = play).padding(vertical = 7.dp, horizontal = 4.dp),
@@ -398,8 +401,12 @@ internal fun SongRow(song: Song, state: AppState, play: () -> Unit, menu: () -> 
         Artwork(song.coverArt, song.album.ifBlank { song.title }, Modifier.size(54.dp), 14)
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
-            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall,
-                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ExplicitBadge(song)
+                Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall,
+                    color = if (blocked) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .55f) else if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+            }
+            if (blocked) Text("Недоступно в детском режиме", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (state.offline.any { it.id == song.id }) { Icon(Icons.Rounded.DownloadDone, "Скачано", Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(4.dp)) }
                 Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -542,7 +549,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
                 Artwork(song.coverArt, song.album.ifBlank { song.title }, Modifier.size(44.dp), 14)
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(song.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { ExplicitBadge(song); Text(song.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     Text(song.artist, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = .7f))
                 }
                 IconButton(play) {
@@ -570,6 +577,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             if (state.isAdmin) OutlinedButton({ serverDashboard = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Dns, null); Spacer(Modifier.width(8.dp)); Text("Сервер и диски") }
             AppearanceControls(state, vm)
             HorizontalDivider()
+            PreferenceSwitch("Детский режим", "Только треки с отметкой «без мата». Неизвестная маркировка блокируется", state.childMode, vm::childMode)
             PreferenceSwitch("Только по Wi-Fi", "Применяется и к уже добавленной очереди", state.wifiOnly, vm::wifiOnly)
             PreferenceSwitch("Скачивать прослушанное", "После прослушивания 80% трека", state.autoOffline.afterListen, { vm.autoOffline(afterListen = it) })
             PreferenceSwitch("Скачивать любимое", "При добавлении трека в «Мне нравится»", state.autoOffline.onFavorite, { vm.autoOffline(onFavorite = it) })
@@ -672,4 +680,15 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             if (state.demo) vm.toast("Подключи музыкальный аккаунт") else vm.connectUpload(server, username, password)
             password = ""; dismiss()
         }, enabled = username.isNotBlank() && password.isNotEmpty()) { Text("Подключить") } }, dismissButton = { TextButton(dismiss) { Text("Отмена") } })
+}
+
+/** Only an explicit metadata mark earns an E; unknown recordings have no badge. */
+@Composable internal fun ExplicitBadge(song: Song) {
+    if (song.contentRating != ContentRating.EXPLICIT) return
+    Surface(shape = RoundedCornerShape(4.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant) {
+        Text("E", modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+            .semantics { contentDescription = "Взрослый контент" },
+            style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+    }
 }

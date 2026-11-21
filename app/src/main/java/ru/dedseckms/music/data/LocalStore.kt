@@ -107,6 +107,8 @@ class LocalStore(private val context: Context, val accountId: String) {
         if (data.has(id) && data.getBoolean(id) == value) data.remove(id)
         save("favorites-pending.json", data)
     }
+    fun childMode(): Boolean = prefs.getBoolean("child_mode", false)
+    fun childMode(value: Boolean) { prefs.edit().putBoolean("child_mode", value).apply() }
     fun wifiOnly(): Boolean = prefs.getBoolean("wifi_only", true)
     fun offlinePreferences() = OfflinePreferences(prefs.getBoolean("auto_listened", false), prefs.getBoolean("auto_favorites", false))
     fun offlinePreferences(value: OfflinePreferences) { prefs.edit().putBoolean("auto_listened", value.afterListen).putBoolean("auto_favorites", value.onFavorite).apply() }

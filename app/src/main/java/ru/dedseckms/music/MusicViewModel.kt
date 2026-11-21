@@ -64,6 +64,7 @@ data class AppState(
     val avatarPath: String? = null, val avatarVersion: String = "", val profileBusy: Boolean = false, val isAdmin: Boolean = false,
     val libraryTotal: Int? = null,
     val autoOffline: OfflinePreferences = OfflinePreferences(), val downloadQueueBusy: Boolean = false,
+    val childMode: Boolean = false,
     val wifiOnly: Boolean = true, val theme: String = "system", val dynamicColor: Boolean = true,
 )
 
@@ -102,7 +103,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         app.credentials.active()?.let { account ->
             mutable.update { it.copy(loggedIn = true, username = account.username, songs = local()!!.cachedSongs(), offline = local()!!.offline(),
                 history = local()!!.history(), favorites = local()!!.cachedFavorites(), favoriteIds = local()!!.cachedFavorites().map { song -> song.id }.toSet(),
-                wifiOnly = local()!!.wifiOnly(), autoOffline = local()!!.offlinePreferences(), uploadConnected = app.credentials.upload(account.accountId) != null) }
+                childMode = local()!!.childMode(), wifiOnly = local()!!.wifiOnly(), autoOffline = local()!!.offlinePreferences(), uploadConnected = app.credentials.upload(account.accountId) != null) }
             observeWork(account.accountId)
             restoreAvatar(account.accountId)
             refresh()
@@ -253,7 +254,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 app.accountChanges.tryEmit(Unit)
                 mutable.value = AppState(loggedIn = true, username = account.username,
                     songs = LocalStore(app, account.accountId).cachedSongs(), offline = LocalStore(app, account.accountId).offline(),
-                    history = LocalStore(app, account.accountId).history(), wifiOnly = LocalStore(app, account.accountId).wifiOnly(), autoOffline = LocalStore(app, account.accountId).offlinePreferences(),
+                    history = LocalStore(app, account.accountId).history(), childMode = LocalStore(app, account.accountId).childMode(), wifiOnly = LocalStore(app, account.accountId).wifiOnly(), autoOffline = LocalStore(app, account.accountId).offlinePreferences(),
                     favorites = LocalStore(app, account.accountId).cachedFavorites(), favoriteIds = LocalStore(app, account.accountId).cachedFavorites().map { it.id }.toSet(),
                     theme = state.value.theme, dynamicColor = state.value.dynamicColor, visualStyle = state.value.visualStyle, palette = state.value.palette,
                     uploadConnected = app.credentials.upload(account.accountId) != null)
@@ -500,10 +501,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (songs.isEmpty()) { toast("Здесь пока нет треков"); return }
         val player = controller ?: run { toast("Плеер ещё запускается"); return }
         val account = app.credentials.activeId() ?: return
-        requestedSong = songs[index.coerceIn(songs.indices)]
+        val selection = ContentPolicy.selection(songs, index.coerceIn(songs.indices), state.value.childMode) ?: run { toast(ContentPolicy.BLOCKED_MESSAGE); return }
+        requestedSong = selection.songs[selection.index]
         player.pause()
         mutable.update { it.copy(now = requestedSong, playbackSource = playbackSourceLabel(source, mix, mood), playing = false, buffering = true, position = 0, duration = (requestedSong?.duration ?: 0) * 1000L) }
-        val token = app.playRequests.offer(account, songs, index, mix, mode, mood, source)
+        val token = app.playRequests.offer(account, selection.songs, selection.index, mix, mode, mood, source)
         player.setMediaItem(MediaItem.Builder().setMediaId("queue:$token").build())
         player.prepare(); player.play()
     }
@@ -519,10 +521,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(mixLoading = true, mixMode = mode, mixMood = mood) }
         mixTask.launch(viewModelScope) { current ->
             try {
-                val mix = profile.await { radio(mode, mood, store.history(), store.disliked(), exclude) }
+                val mix = profile.await { radio(mode, mood, store.history(), store.disliked(), exclude, childMode = store.childMode()) }
                 if (revision == generation && current()) {
                     mutable.update { it.copy(mixLoading = false) }
-                    if (mix.songs.isEmpty()) toast(mix.emptyMessage()) else playPrepared(mix.songs, 0, true, mode, mood)
+                    val allowed = mix.songs.filter { ContentPolicy.allowed(it, state.value.childMode) }
+                    if (allowed.isEmpty()) toast(if (state.value.childMode) ContentPolicy.BLOCKED_MESSAGE else mix.emptyMessage()) else playPrepared(allowed, 0, true, mode, mood)
                 }
             } catch (error: CancellationException) { throw error
             } catch (error: Exception) { if (revision == generation && current()) { mutable.update { it.copy(mixLoading = false) }; toast(safeMessage(error)) } }
@@ -661,6 +664,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun download(song: Song) = downloadAll(listOf(song))
     fun downloadAll(songs: List<Song>) {
         val account = app.credentials.activeId() ?: run { toast("Подключи сервер для скачивания"); return }
+        if (songs.isNotEmpty() && songs.none { ContentPolicy.allowed(it, state.value.childMode) }) { toast(ContentPolicy.BLOCKED_MESSAGE); return }
         val revision = generation
         if (state.value.downloadQueueBusy) return
         mutable.update { it.copy(downloadQueueBusy = true) }
@@ -672,6 +676,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             catch (_: Exception) { if (revision == generation) toast("Не удалось добавить загрузки в очередь") }
             finally { if (revision == generation) mutable.update { it.copy(downloadQueueBusy = false) } }
         }
+    }
+    fun childMode(enabled: Boolean) {
+        local()?.childMode(enabled)
+        mixTask.cancel(); requestedSong = null; app.playRequests.clear()
+        controller?.stop(); controller?.clearMediaItems()
+        app.contentPolicyChanges.tryEmit(Unit)
+        mutable.update { it.copy(childMode = enabled, now = null, playing = false, buffering = false,
+            queue = emptyList(), coverQueue = emptyList(), queueStart = 0, queueIndex = 0, waveActive = false, mixLoading = false) }
+        if (enabled) toast("Детский режим включён. Выбери трек с подтверждённой отметкой без мата")
     }
     fun autoOffline(afterListen: Boolean = state.value.autoOffline.afterListen, onFavorite: Boolean = state.value.autoOffline.onFavorite) {
         val value = OfflinePreferences(afterListen, onFavorite)
