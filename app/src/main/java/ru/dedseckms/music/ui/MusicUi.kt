@@ -501,8 +501,8 @@ internal fun SongRow(song: Song, state: AppState, play: () -> Unit, menu: () -> 
         }
         item {
             Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button({ vm.play(page.songs, source = collectionSource(page.kind, page.title)) }, enabled = page.songs.isNotEmpty(), modifier = Modifier.weight(1f).height(52.dp)) { Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Слушать") }
-                FilledTonalButton({ vm.play(page.songs.shuffled(), source = collectionSource(page.kind, page.title)) }, enabled = page.songs.isNotEmpty(), modifier = Modifier.height(52.dp)) { Icon(Icons.Rounded.Shuffle, "Перемешать") }
+                Button({ vm.playCollection(page.songs, source = collectionSource(page.kind, page.title)) }, enabled = page.songs.isNotEmpty(), modifier = Modifier.weight(1f).height(52.dp)) { Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Слушать") }
+                FilledTonalButton({ vm.playCollection(page.songs.shuffled(), source = collectionSource(page.kind, page.title)) }, enabled = page.songs.isNotEmpty(), modifier = Modifier.height(52.dp)) { Icon(Icons.Rounded.Shuffle, "Перемешать") }
             }
         }
         if (page.songs.isNotEmpty() && page.kind != "offline") item {
