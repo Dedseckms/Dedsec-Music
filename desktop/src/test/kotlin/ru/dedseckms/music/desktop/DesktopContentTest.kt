@@ -197,4 +197,44 @@ class DesktopContentTest {
         }
     }
 
+    @Test fun durableRatingGuardRejectsStaleCallbacksAndDoesNotCarryCleanToChangedAudio() {
+        val credentials = Credentials("https://music.example", "test", "fixture")
+        val local = DesktopStore(credentials, temp.newFolder().toPath())
+        val staleClean = unknown.copy(contentRating = ContentRating.CLEAN, contentRatingOverride = true)
+        Files.createDirectories(local.audio(unknown).parent); Files.write(local.audio(unknown), byteArrayOf(1, 2, 3))
+        local.rememberContentRating(unknown, ContentRating.EXPLICIT, true)
+        local.downloaded(staleClean, 3); local.record(staleClean); local.queueDownloads(listOf(staleClean))
+        val reopened = DesktopStore(credentials, local.directory)
+        for (song in listOf(reopened.offline().single(), reopened.history().single().song, reopened.pendingDownloads().single())) {
+            assertEquals(ContentRating.EXPLICIT, song.contentRating)
+        }
+        local.rememberContentRating(unknown, ContentRating.CLEAN, true)
+        assertEquals(ContentRating.UNKNOWN, reopened.canonicalRating(unknown.copy(size = 999)).contentRating)
+        local.rememberContentRating(unknown, ContentRating.UNKNOWN, false)
+        assertEquals(ContentRating.UNKNOWN, reopened.canonicalRating(staleClean).contentRating)
+        assertTrue(Files.exists(local.audio(unknown)))
+        val c = controller()
+        try {
+            state(c).value = DesktopState(loggedIn = true, songs = listOf(staleClean))
+            c.childMode(true); c.applyContentRating(unknown.id, ContentRating.EXPLICIT, true)
+            c.play(listOf(staleClean)); c.download(staleClean)
+            assertNull(c.state.value.now); assertTrue(c.state.value.downloadIds.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun laterServerRatingReplacesManualSnapshotAndStillProtectsAgainstStaleWriters() {
+        val local = DesktopStore(Credentials("https://music.example", "test", "fixture"), temp.newFolder().toPath())
+        val old = unknown.copy(contentRating = ContentRating.CLEAN, contentRatingOverride = true)
+        local.rememberContentRating(old, ContentRating.CLEAN, true)
+        val fresh = unknown.copy(contentRating = ContentRating.EXPLICIT, contentRatingCheckedAt = System.currentTimeMillis() + 1000)
+        assertEquals(ContentRating.EXPLICIT, local.canonicalRating(fresh).contentRating)
+        assertFalse(ContentPolicy.allowed(local.canonicalRating(fresh), true))
+        Files.createDirectories(local.audio(unknown).parent); Files.write(local.audio(unknown), byteArrayOf(1, 2, 3))
+        local.downloaded(old, 3); local.record(old); local.queueDownloads(listOf(old))
+        val reopened = DesktopStore(local.credentials, local.directory)
+        assertEquals(ContentRating.EXPLICIT, reopened.offline().single().contentRating)
+        assertEquals(ContentRating.EXPLICIT, reopened.history().single().song.contentRating)
+        assertEquals(ContentRating.EXPLICIT, reopened.pendingDownloads().single().contentRating)
+        assertEquals(ContentRating.EXPLICIT, reopened.canonicalRating(old.copy(contentRatingCheckedAt = 1)).contentRating)
+    }
+
 }
