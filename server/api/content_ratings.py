@@ -127,4 +127,3 @@ class Store:
         with self.db() as db:
             row=db.execute('SELECT library,path,bytes,mtime,device,inode,source_id FROM ratings WHERE song=?',(song['id'],)).fetchone()
         return row is not None and tuple(row[:6])==signature and row[6]==source_id
-
