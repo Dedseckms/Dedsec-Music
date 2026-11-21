@@ -31,7 +31,11 @@ class ContentRatingsProtocolTest {
             assertEquals("Bearer test", request.getHeader("Authorization"))
             val ids = JSONObject(request.body.readUtf8()).getJSONArray("ids")
             assertEquals(5, ids.length())
-            ratings.enrich(root()); assertEquals(2, server.requestCount)
+            val checkedAt = Song.parse(songs.getJSONObject(0)).contentRatingCheckedAt
+            assertTrue(checkedAt > 0)
+            assertFalse(Song.parse(songs.getJSONObject(0)).json().has("_dedsecRatingCheckedAt"))
+            val cached = root(); ratings.enrich(cached); assertEquals(2, server.requestCount)
+            assertEquals(checkedAt, Song.parse(cached.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(0)).contentRatingCheckedAt)
         }
     }
     @Test fun unsupportedServerNeverTurnsUnknownIntoClean() {

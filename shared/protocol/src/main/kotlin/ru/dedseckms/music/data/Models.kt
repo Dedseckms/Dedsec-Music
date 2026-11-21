@@ -25,6 +25,8 @@ data class Song(
     val genres: List<String> = emptyList(),
     val contentRating: ContentRating = ContentRating.UNKNOWN,
     val contentRatingOverride: Boolean = false,
+    /** Local request-start receipt; deliberately omitted from persisted song JSON. */
+    val contentRatingCheckedAt: Long = 0,
 ) {
     fun json() = JSONObject().put("id", id).put("title", title).put("artist", artist)
         .put("album", album).put("albumId", albumId).put("artistId", artistId).put("coverArt", coverArt)
@@ -47,6 +49,7 @@ data class Song(
             genres = value.optJSONArray("genres").objects().map { it.optString("name") }.filter(String::isNotBlank).distinct(),
             contentRating = ContentRating.parse(value.optString("explicitStatus")),
             contentRatingOverride = value.optBoolean("contentRatingOverride", false),
+            contentRatingCheckedAt = value.optLong("_dedsecRatingCheckedAt"),
         )
     }
 }
