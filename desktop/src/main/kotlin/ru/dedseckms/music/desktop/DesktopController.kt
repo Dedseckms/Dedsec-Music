@@ -12,6 +12,7 @@ import java.nio.file.StandardCopyOption.*
 
 data class DesktopPage(val kind: String, val title: String, val songs: List<Song>, val playlist: MusicPlaylist? = null, val albums: List<Album> = emptyList())
 data class DesktopState(
+    val childMode: Boolean = false,
     val autoOffline: OfflinePreferences = OfflinePreferences(), val downloadIds: Set<String> = emptySet(), val downloadProgress: Int = 0, val downloadsPaused: Boolean = false,
     val importStatus: ImportStatus = ImportStatus(), val isAdmin: Boolean = false,
     val username: String = "", val loggedIn: Boolean = false, val demo: Boolean = false,
@@ -35,7 +36,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private var appearance = preferences.read()
     private val preferenceLock = kotlinx.coroutines.sync.Mutex()
     private val searchHistoryLock = kotlinx.coroutines.sync.Mutex()
-    private fun DesktopState.styled() = copy(autoOffline = store?.offlinePreferences() ?: OfflinePreferences(), dark = appearance.dark, palette = appearance.palette, style = appearance.style, amoled = appearance.amoled)
+    private fun DesktopState.styled() = copy(childMode = store?.childMode() ?: childMode, autoOffline = store?.offlinePreferences() ?: OfflinePreferences(), dark = appearance.dark, palette = appearance.palette, style = appearance.style, amoled = appearance.amoled)
     var exitForUpdate: (() -> Unit)? = null
     private val mutable = MutableStateFlow(DesktopState().styled())
     val state = mutable.asStateFlow()
@@ -96,6 +97,20 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 launch(Dispatchers.IO) { local?.record(song); runCatching { nav?.scrobble(song.id) } }
             }
         } }
+    }
+    private fun allowed(song: Song) = ContentPolicy.allowed(song, state.value.childMode)
+    fun childMode(enabled: Boolean) {
+        if (enabled == state.value.childMode) return
+        // Invalidate pending decoders and callbacks before publishing the new policy.
+        queueEpoch++; playJob?.cancel(); prepareJob?.cancel(); invalidateMix()
+        audio.stop(); audio.clearNext(); queue.set(emptyList(), 0)
+        downloadJob?.cancel(); downloadJob = null
+        downloadQueue.removeAll { !ContentPolicy.allowed(it, enabled) }
+        mutable.update { it.copy(childMode = enabled, now = null, queue = emptyList(), cursor = 0,
+            wave = false, ended = false, busy = false, shuffle = false, transfer = null,
+            downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
+        store?.childMode(enabled)
+        downloadAll(emptyList(), silent = true)
     }
     fun notice(text: String?) { mutable.update { it.copy(message = text) } }
     private fun failure(error: Exception) = if (error is java.io.IOException && !error.message.orEmpty().contains("http", true)) error.message ?: "Проверь соединение" else "Не удалось выполнить операцию. Проверь подключение"
@@ -271,21 +286,32 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         DesktopPage("artist", artist.name, songs.distinctBy(Song::id), albums = profile.albums)
     }
     fun genre(genre: Genre) = open("genre", genre.name) { nav -> DesktopPage("genre", genre.name, nav.await { genreSongs(genre.name) }) }
+    fun playCollection(songs: List<Song>, source: String) {
+        val candidates = songs.filter(::allowed)
+        if (candidates.isEmpty()) { notice(ContentPolicy.BLOCKED_MESSAGE); return }
+        play(candidates, source = source)
+    }
     fun play(songs: List<Song>, index: Int = 0, source: String = "Вся музыка", wave: Boolean = false) {
         invalidateMix()
         if (state.value.demo) { notice("Это демонстрация интерфейса. Войди на сервер, чтобы слушать музыку"); return }
         if (songs.isEmpty()) return
+        val selection = ContentPolicy.selection(songs, index, state.value.childMode)
+        if (selection == null) { notice(ContentPolicy.BLOCKED_MESSAGE); return }
         queueEpoch++; prepareJob?.cancel(); audio.clearNext()
-        queue.set(songs, index); mutable.update { it.beginQueue(wave, source) }; playCurrent()
+        queue.set(selection.songs, selection.index); mutable.update { it.beginQueue(wave, source) }; playCurrent()
     }
     private fun playCurrent() {
         val song = queue.current ?: return; val nav = api ?: return; val local = store ?: return
+        if (!allowed(song)) { audio.stop(); notice(ContentPolicy.BLOCKED_MESSAGE); return }
+        val epoch = ++queueEpoch; val revision = generation
         playJob?.cancel(); prepareJob?.cancel(); audio.stop(preservePrepared = true); recorded = ""
         mutable.update { it.copy(now = song, queue = queue.order.map(queue.songs::get), cursor = queue.cursor, ended = false) }
         playJob = scope.launch {
             try {
                 val uri = withContext(Dispatchers.IO) { local.audio(song).takeIf(Files::isRegularFile)?.toUri()?.toString() ?: nav.stream(song) }
-                audio.start(uri, "$queueEpoch:${queue.order[queue.cursor]}")
+                currentCoroutineContext().ensureActive()
+                if (epoch != queueEpoch || revision != generation || !allowed(song)) return@launch
+                audio.start(uri, "$epoch:${queue.order[queue.cursor]}")
                 prepareNext()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { notice(failure(e)) }
@@ -297,13 +323,13 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         val position = if (queue.cursor + 1 < queue.order.size) queue.cursor + 1 else if (state.value.repeat && !state.value.wave && queue.order.size > 1) 0 else -1
         val index = queue.order.getOrNull(position)
         if (index == null || index == queue.order.getOrNull(queue.cursor)) { audio.clearNext(); return }
-        val song = queue.songs[index]; val nav = api ?: return; val local = store ?: return
+        val song = queue.songs[index]; if (!allowed(song)) { audio.clearNext(); return }; val nav = api ?: return; val local = store ?: return
         val epoch = queueEpoch; val revision = generation; val cache = covers
         prepareJob = track(scope.launch {
             try {
                 val uri = withContext(Dispatchers.IO) { local.audio(song).takeIf(Files::isRegularFile)?.toUri()?.toString() ?: nav.stream(song) }
                 currentCoroutineContext().ensureActive()
-                if (epoch != queueEpoch || revision != generation) return@launch
+                if (epoch != queueEpoch || revision != generation || !allowed(song)) return@launch
                 audio.prepareNext("$epoch:$index", uri)
                 cache?.get(song.coverArt, 384)
             } catch (error: CancellationException) { throw error
@@ -315,18 +341,20 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         if (parts.size != 2 || parts[0].toLongOrNull() != queueEpoch) return
         val index = parts[1].toIntOrNull() ?: return
         val position = queue.order.indexOf(index)
+        if (queue.songs.getOrNull(index)?.let(::allowed) != true) { audio.stop(); return }
         if (!queue.select(position)) return
         val song = queue.current ?: return; recorded = ""
         mutable.update { it.copy(now = song, queue = queue.order.map(queue.songs::get), cursor = queue.cursor, ended = false) }
         prepareNext()
     }
     private fun onEnded() {
+        if (state.value.now?.let(::allowed) != true) return
         if (state.value.repeatOne) playCurrent()
         else if (queue.move(true, state.value.repeat && !state.value.wave)) playCurrent()
         else if (state.value.wave) { mutable.update { it.copy(ended = true) }; wave(keep = true) }
         else mutable.update { it.copy(ended = true) }
     }
-    fun toggle() { invalidateMix(); if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }
+    fun toggle() { if (state.value.now?.let(::allowed) != true) return; invalidateMix(); if (state.value.ended || audio.state.value.error) playCurrent() else audio.toggle() }
     fun skip(forward: Boolean) {
         invalidateMix()
         val song = state.value.now; val activeProfile = profile
@@ -357,13 +385,14 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         mutable.update { it.copy(busy = true) }
         mixJob = scope.launch {
             try {
-                val mix = activeProfile.await { radio(mode, mood, local.history(), exclude = exclude) }
+                val mix = activeProfile.await { radio(mode, mood, local.history(), exclude = exclude, childMode = state.value.childMode) }
                 currentCoroutineContext().ensureActive()
                 if (revision == generation && mixToken == mixRevision) {
                     mixJob = null
-                    if (mix.songs.isEmpty()) notice(mix.emptyMessage()) else {
+                    val safe = mix.songs.filter(::allowed)
+                    if (safe.isEmpty()) notice(if (state.value.childMode) ContentPolicy.BLOCKED_MESSAGE else mix.emptyMessage()) else {
                         mutable.update { it.copy(mood = mood, mode = mode) }
-                        play(mix.songs, source = playbackSourceLabel("", true, mood), wave = true)
+                        play(safe, source = playbackSourceLabel("", true, mood), wave = true)
                     }
                 }
             } catch (e: CancellationException) { throw e }
@@ -407,7 +436,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     fun downloadAll(songs: List<Song>, silent: Boolean = false) {
         val local = store ?: return; val revision = generation
         val known = (state.value.offline.map(Song::id) + downloadQueue.map(Song::id)).toHashSet()
-        val added = songs.distinctBy(Song::id).filter { known.add(it.id) }
+        val added = songs.distinctBy(Song::id).filter { allowed(it) && known.add(it.id) }
         downloadQueue.addAll(added)
         if (added.isNotEmpty()) {
             val previousSave = queueSaveJob
@@ -418,7 +447,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
             })
             mutable.update { it.copy(downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
         }
-        if (!silent) notice(if (added.isEmpty()) "Треки уже скачаны или стоят в очереди" else "В очередь добавлено: ${added.size}")
+        if (!silent) notice(if (songs.any { !allowed(it) }) ContentPolicy.BLOCKED_MESSAGE else if (added.isEmpty()) "Треки уже скачаны или стоят в очереди" else "В очередь добавлено: ${added.size}")
         if (state.value.downloadsPaused || downloadJob?.isActive == true || downloadQueue.isEmpty()) return
         val nav = api ?: return
         downloadJob = track(scope.launch {
@@ -427,6 +456,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 currentCoroutineContext().ensureActive()
                 if (revision != generation || state.value.downloadsPaused) return@launch
                 val song = downloadQueue.first()
+                if (!allowed(song)) { downloadQueue.removeFirst(); continue }
                 try { transferLock.withPermit { downloadOne(song, local, nav, revision) }; withContext(Dispatchers.IO) { local.finishDownload(song.id) } }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { if (revision == generation) mutable.update { it.copy(downloadsPaused = true, message = "Загрузка приостановлена. Проверь сеть и свободное место; очередь сохранена") }; return@launch }
@@ -449,6 +479,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
         })
     }
     private suspend fun downloadOne(song: Song, local: DesktopStore, nav: NavApi, revision: Int) {
+        currentCoroutineContext().ensureActive(); if (!allowed(song)) return
         mutable.update { it.copy(transfer = "Скачиваем: ${song.title}", downloadProgress = 0) }
         try {
             transfer(nav.client) { client ->

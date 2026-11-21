@@ -104,6 +104,7 @@ import java.io.File
                 if (artwork != null) Image(artwork!!, song.album.ifBlank { song.title }, cover, contentScale = ContentScale.Crop)
                 else Cover(song.coverArt, song.album.ifBlank { song.title }, cover, 28)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ExplicitBadge(song)
                     Text(song.title, style = if (roomy) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(song.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
                     if (showAlbum) Text(song.album, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
