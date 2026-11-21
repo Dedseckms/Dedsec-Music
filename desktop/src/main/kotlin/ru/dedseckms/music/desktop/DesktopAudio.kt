@@ -128,8 +128,8 @@ class DesktopAudio(private val scope: CoroutineScope, private val ended: () -> U
     fun clearNext(cancelTransition: Boolean = false) { scope.launch(audioThread) {
         next = null
         if (cancelTransition) {
-            generation++
             fade?.let { transition ->
+                generation++
                 // Revoke a staged transition while retaining the currently selected safe track.
                 active = transition.from; spare = transition.to; reset(transition.to)
                 applyVolume(transition.from, 1.0)
