@@ -13,6 +13,8 @@ import kotlinx.coroutines.*
 import okio.buffer
 import java.util.concurrent.TimeUnit
 
+internal class ContentRatingsUnavailable(val unsupported: Boolean) : IOException("Маркировка треков пока недоступна")
+
 data class AccountProfile(val userId: String, val avatarVersion: String, val librarySongCount: Int, val isAdmin: Boolean = false)
 
 /** Native Navidrome tokens stay in memory and are sent only to the configured music origin. */
@@ -96,16 +98,41 @@ class ProfileApi(private val credentials: Credentials, client: okhttp3.OkHttpCli
             value.optJSONObject("uploads")?.optString("path") == "/dedsec/profile/v1/uploads"
     }
     /** Optional metadata only; authorization remains bound to the configured music origin. */
-    fun contentRatings(ids: List<String>): Map<String, ContentRating> {
+    internal fun contentRatings(ids: List<String>): ContentRatingBatch {
         require(ids.size <= 500 && ids.all { it.matches(Regex("[A-Za-z0-9_-]{1,80}")) })
         val wanted = ids.toSet()
         val body = JSONObject().put("ids", JSONArray(ids.distinct())).toString().toRequestBody("application/json".toMediaType())
         return authorized { request("content-ratings", it).post(body).build() }.use {
-            if (!it.isSuccessful) throw IOException("Маркировка треков пока недоступна")
-            val values = JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)).getJSONObject("ratings")
-            values.keys().asSequence().filter { key -> key in wanted }.mapNotNull { key ->
-                ContentRating.parse(values.optString(key)).takeUnless { rating -> rating == ContentRating.UNKNOWN }?.let { rating -> key to rating }
+            if (!it.isSuccessful) throw ContentRatingsUnavailable(it.code in setOf(404, 405))
+            parseContentRatings(JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)), wanted)
+
+        }
+    }
+    private fun parseContentRatings(data: JSONObject, wanted: Set<String>): ContentRatingBatch {
+        fun values(key: String): Map<String, ContentRating> {
+            val raw = data.optJSONObject(key) ?: return emptyMap()
+            return raw.keys().asSequence().filter { it in wanted }.mapNotNull { id ->
+                ContentRating.parse(raw.optString(id)).takeUnless { it == ContentRating.UNKNOWN }?.let { id to it }
             }.toMap()
+        }
+        require(data.has("ratings"))
+        val ratings = values("ratings"); val overrides = values("overrides")
+        if (overrides.any { (id, rating) -> ratings[id] != rating }) throw IOException("Противоречивая маркировка треков")
+        return ContentRatingBatch(ratings, overrides)
+    }
+    /** Null restores source metadata; only a server administrator may create an override. */
+    fun setContentRating(id: String, rating: ContentRating?): ContentRatingUpdate {
+        require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")) && rating != ContentRating.UNKNOWN)
+        val body = JSONObject().put("id", id).put("status", rating?.wire ?: "source").toString().toRequestBody("application/json".toMediaType())
+        return authorized { request("content-ratings/override", it).post(body).build() }.use {
+            if (!it.isSuccessful) throw IOException(when (it.code) {
+                403 -> "Менять маркировку может только администратор сервера"
+                404, 405 -> "Для ручной маркировки нужно обновить сервер"
+                409 -> "Аудиофайл изменился. Обнови трек и повтори"
+                else -> "Не удалось сохранить маркировку"
+            })
+            val data = parseContentRatings(JSONObject(String(readBounded(it.body?.byteStream() ?: throw IOException("Нет ответа"), 65536), Charsets.UTF_8)), setOf(id))
+            ContentRatingUpdate(data.ratings[id] ?: ContentRating.UNKNOWN, id in data.overrides)
         }
     }
     fun lyrics(id: String): JSONObject {

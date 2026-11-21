@@ -91,6 +91,7 @@ class NavApi(val credentials: Credentials, val client: OkHttpClient = httpClient
         catch (_: IOException) { throw IOException("Нет связи с музыкальным сервером") }
     }
 
+    fun invalidateContentRating(id: String) { ratings?.invalidate(id) }
     fun ping() { call("ping") }
     fun canonicalUsername(): String = call("getUser", "username" to credentials.username).getJSONObject("user").getString("username")
     fun search(query: String): SearchResults {

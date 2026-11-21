@@ -21,3 +21,6 @@ object ContentPolicy {
 }
 
 data class ContentSelection(val songs: List<Song>, val index: Int)
+
+data class ContentRatingUpdate(val rating: ContentRating, val overridden: Boolean)
+internal data class ContentRatingBatch(val ratings: Map<String, ContentRating>, val overrides: Map<String, ContentRating>)
