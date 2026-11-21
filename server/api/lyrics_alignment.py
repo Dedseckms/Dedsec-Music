@@ -16,7 +16,8 @@ import tempfile
 import threading
 import time
 
-import profile_api as profile
+if __name__!='__main__':
+    import profile_api as profile
 
 ROUTE='/dedsec/profile/v1/lyrics-align/worker/'
 MODEL='mfa-ru-gmm-v1'
@@ -279,11 +280,11 @@ class Broker:
 
 
 if __name__=='__main__':
+    if len(sys.argv)!=4 or sys.argv[1]!='--decode':raise SystemExit(2)
     import ctypes
     import resource
     import signal
     parent=os.getppid()
-    if len(sys.argv)!=4 or sys.argv[1]!='--decode':raise SystemExit(2)
     if ctypes.CDLL(None,use_errno=True).prctl(1,signal.SIGTERM,0,0,0)!=0 or os.getppid()!=parent:raise SystemExit(1)
     os.nice(19);os.sched_setaffinity(0,{max(os.sched_getaffinity(0))})
     for kind,limit in ((resource.RLIMIT_AS,512*2**20),(resource.RLIMIT_CPU,20),(resource.RLIMIT_FSIZE,MAX_PCM),(resource.RLIMIT_NOFILE,32),(resource.RLIMIT_CORE,0)):

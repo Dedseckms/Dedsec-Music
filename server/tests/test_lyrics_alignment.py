@@ -6,8 +6,12 @@ import importlib.util
 import os
 from pathlib import Path
 import sqlite3
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+import wave
 from unittest.mock import Mock,patch
 
 import test_lyrics_batch as fixtures
@@ -167,6 +171,24 @@ class AlignmentTests(unittest.TestCase):
             m,lib,db,user,version,value=self.fixture(Path(tmp))
             job=json.loads(json.dumps(self.lease(m)))
             worker.validate_job(job)
+
+    def test_isolated_decoder_cli_does_not_import_gateway_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script=Path(tmp)/'lyrics_alignment.py';shutil.copyfile(alignment.__file__,script)
+            result=subprocess.run([sys.executable,'-I',str(script),'--invalid'],capture_output=True,timeout=10)
+            self.assertEqual(result.returncode,2)
+            self.assertEqual(result.stderr,b'')
+
+    @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('ffmpeg'),'Linux bounded FFmpeg decoder')
+    def test_real_decoder_runs_from_isolated_frozen_module_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);script=root/'lyrics_alignment.py';shutil.copyfile(alignment.__file__,script)
+            source=root/'source.wav';target=root/'audio.pcm'
+            with wave.open(str(source),'wb') as wav:
+                wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(16000);wav.writeframes(b'\0'*32000)
+            result=subprocess.run([sys.executable,'-I',str(script),'--decode',str(source),str(target)],capture_output=True,timeout=35)
+            self.assertEqual(result.returncode,0)
+            self.assertEqual(target.stat().st_size,32000)
 
     @unittest.skipIf(os.name!='posix','POSIX file permission contract')
     def test_dedicated_token_permissions_scope_duplicate_headers_and_no_native_jwt(self):
