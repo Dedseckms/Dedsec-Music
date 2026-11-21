@@ -87,6 +87,31 @@ class ChildModeTest {
         }
     }
 
+    @Test fun freshAuthoritativeRatingSupersedesSnapshotButOlderResponsesDoNot() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val account = java.util.UUID.randomUUID().toString().replace("-", "")
+        val store = LocalStore(context, account)
+        val song = Song("fresh-rating", "Test", "Artist", contentRating = ContentRating.UNKNOWN)
+        try {
+            store.updateContentRating(song, ContentRating.CLEAN, true)
+            val oldResponse = song.copy(contentRating = ContentRating.EXPLICIT, contentRatingCheckedAt = 1L)
+            assertEquals(ContentRating.CLEAN, store.contentRatedSong(oldResponse).contentRating)
+            val freshResponse = song.copy(contentRating = ContentRating.EXPLICIT, contentRatingCheckedAt = System.currentTimeMillis() + 60_000L)
+            val fresh = store.contentRatedSong(freshResponse)
+            assertEquals(ContentRating.EXPLICIT, fresh.contentRating)
+            assertFalse(fresh.contentRatingOverride)
+            assertFalse(ContentPolicy.allowed(fresh, true))
+            val staleWorker = song.copy(contentRating = ContentRating.CLEAN)
+            store.audioFile(song.id).writeBytes(byteArrayOf(1, 2))
+            store.downloaded(staleWorker, 2L)
+            assertEquals(ContentRating.EXPLICIT, store.offline().single().contentRating)
+            assertFalse(ContentPolicy.allowed(store.offline().single(), true))
+        } finally {
+            java.io.File(context.filesDir, "accounts/$account").deleteRecursively()
+            context.getSharedPreferences("account_$account", 0).edit().clear().commit()
+        }
+    }
+
     @Test fun mediaSessionSongExtrasRetainRatingsAndFailClosedForOldSongs() {
         for (rating in ContentRating.entries) {
             val song = Song("test", "Test", "Artist", contentRating = rating)

@@ -78,6 +78,12 @@ class LocalStore(private val context: Context, val accountId: String) {
     fun contentRatedSong(song: Song): Song = synchronized(lock) {
         val raw = prefs.getString("content_rating_${sha256(song.id)}", null) ?: return@synchronized song
         val value = try { JSONObject(raw) } catch (_: Exception) { return@synchronized song }
+        if (song.contentRatingCheckedAt > value.optLong("updatedAt")) {
+            val fresh = JSONObject().put("fingerprint", contentFingerprint(song)).put("rating", song.contentRating.wire)
+                .put("overridden", song.contentRatingOverride).put("updatedAt", song.contentRatingCheckedAt)
+            check(prefs.edit().putString("content_rating_${sha256(song.id)}", fresh.toString()).commit()) { "Не удалось обновить маркировку контента" }
+            return@synchronized song
+        }
         if (value.optString("fingerprint") != contentFingerprint(song)) return@synchronized song
         song.copy(contentRating = ContentRating.parse(value.optString("rating")), contentRatingOverride = value.optBoolean("overridden"))
     }
@@ -163,6 +169,7 @@ class LocalStore(private val context: Context, val accountId: String) {
     fun updateContentRating(song: Song, rating: ContentRating, overridden: Boolean) = synchronized(lock) {
         val id = song.id
         val snapshot = JSONObject().put("fingerprint", contentFingerprint(song)).put("rating", rating.wire).put("overridden", overridden)
+            .put("updatedAt", System.currentTimeMillis())
         check(prefs.edit().putString("content_rating_${sha256(id)}", snapshot.toString()).commit()) {
             "Не удалось сохранить маркировку контента"
         }
