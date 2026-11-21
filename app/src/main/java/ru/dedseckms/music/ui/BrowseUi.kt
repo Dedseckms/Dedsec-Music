@@ -127,7 +127,7 @@ internal fun ArtistScreen(profile: ArtistProfile, state: AppState, vm: MusicView
                 }
             }
         }
-        item { Button({ vm.play(profile.songs, source = collectionSource("artist", profile.artist.name)) }, enabled = profile.songs.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        item { Button({ vm.playCollection(profile.songs, source = collectionSource("artist", profile.artist.name)) }, enabled = profile.songs.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Слушать исполнителя")
         } }
         if (profile.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }

@@ -491,6 +491,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Exception) { if (revision == generation && current()) { mutable.update { it.copy(loading = false) }; toast(safeMessage(error)) } }
         }
     }
+    fun playCollection(songs: List<Song>, source: String = "") {
+        val allowed = songs.filter { ContentPolicy.allowed(it, state.value.childMode) }
+        if (songs.isNotEmpty() && allowed.isEmpty()) { toast(ContentPolicy.BLOCKED_MESSAGE); return }
+        play(allowed, source = source)
+    }
     fun play(songs: List<Song>, index: Int = 0, mix: Boolean = false, source: String = "") {
         mixTask.cancel()
         mutable.update { it.copy(mixLoading = false) }
