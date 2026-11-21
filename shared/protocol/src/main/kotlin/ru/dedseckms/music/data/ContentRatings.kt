@@ -29,7 +29,7 @@ internal class ContentRatings(credentials: Credentials, client: OkHttpClient, lo
         collect(root)
         if (songs.isEmpty()) return
         val now = System.nanoTime()
-        val ids = songs.filter { ContentRating.parse(it.optString("explicitStatus")) == ContentRating.UNKNOWN }
+        val ids = songs.filter { ContentRating.parse(it.optString("explicitStatus")) != ContentRating.EXPLICIT }
             .map { it.getString("id") }.distinct()
         val missing = ids.filter { cache[it]?.expires?.let { expiry -> expiry > now } != true }
         if (missing.isNotEmpty() && now >= retryAfter) {
@@ -46,9 +46,10 @@ internal class ContentRatings(credentials: Credentials, client: OkHttpClient, lo
             }
         }
         for (song in songs) {
-            if (ContentRating.parse(song.optString("explicitStatus")) != ContentRating.UNKNOWN) continue
+            val native = ContentRating.parse(song.optString("explicitStatus"))
+            if (native == ContentRating.EXPLICIT) continue
             val found = cache[song.optString("id")]?.takeIf { it.expires > now }?.rating ?: continue
-            if (found != ContentRating.UNKNOWN) song.put("explicitStatus", found.wire)
+            if (found == ContentRating.EXPLICIT || native == ContentRating.UNKNOWN && found == ContentRating.CLEAN) song.put("explicitStatus", found.wire)
         }
     }
 }

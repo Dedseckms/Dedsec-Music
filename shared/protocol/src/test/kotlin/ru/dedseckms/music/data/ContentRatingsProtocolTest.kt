@@ -10,11 +10,11 @@ import org.junit.Test
 class ContentRatingsProtocolTest {
     private fun root() = JSONObject().put("searchResult3", JSONObject().put("song", JSONArray().put(JSONObject().put("id", "adult").put("title", "A"))
         .put(JSONObject().put("id", "clean").put("title", "B")).put(JSONObject().put("id", "unknown").put("title", "C"))
-        .put(JSONObject().put("id", "native").put("title", "D").put("explicitStatus", "explicit"))))
+        .put(JSONObject().put("id", "native").put("title", "D").put("explicitStatus", "explicit")).put(JSONObject().put("id", "conflict").put("title", "E").put("explicitStatus", "clean"))))
     @Test fun batchedRatingsPreserveNativeAndUnknownAndReuseAccountCache() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
-            server.enqueue(MockResponse().setBody("""{"ratings":{"adult":"explicit","clean":"clean","outsider":"clean"}}"""))
+            server.enqueue(MockResponse().setBody("""{"ratings":{"adult":"explicit","clean":"clean","outsider":"clean","conflict":"explicit"}}"""))
             val ratings = ContentRatings(Credentials(server.url("/").toString(), "u", "p"), NavApi.httpClient(), true)
             val data = root(); ratings.enrich(data)
             val songs = data.getJSONObject("searchResult3").getJSONArray("song")
@@ -22,12 +22,15 @@ class ContentRatingsProtocolTest {
             assertEquals("clean", songs.getJSONObject(1).getString("explicitStatus"))
             assertEquals("", songs.getJSONObject(2).optString("explicitStatus"))
             assertEquals("explicit", songs.getJSONObject(3).getString("explicitStatus"))
+            val conflict = Song.parse(songs.getJSONObject(4))
+            assertEquals(ContentRating.EXPLICIT, conflict.contentRating)
+            assertFalse(ContentPolicy.allowed(conflict, true))
             server.takeRequest()
             val request = server.takeRequest()
             assertEquals("/dedsec/profile/v1/content-ratings", request.path)
             assertEquals("Bearer test", request.getHeader("Authorization"))
             val ids = JSONObject(request.body.readUtf8()).getJSONArray("ids")
-            assertEquals(3, ids.length())
+            assertEquals(4, ids.length())
             ratings.enrich(root()); assertEquals(2, server.requestCount)
         }
     }
