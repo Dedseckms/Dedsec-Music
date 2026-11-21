@@ -11,6 +11,7 @@ class QueueState {
     var shuffled = false; private set
     val current: Song? get() = order.getOrNull(cursor)?.let(songs::get)
     fun set(items: List<Song>, index: Int) { songs = items.toList(); order = songs.indices.toList(); cursor = index.coerceIn(0, (songs.size - 1).coerceAtLeast(0)); shuffled = false }
+    fun updateSong(id: String, update: (Song) -> Song) { songs = songs.map { if (it.id == id) update(it) else it } }
     fun shuffle(random: Random = Random.Default) {
         val currentIndex = order.getOrNull(cursor) ?: return
         shuffled = !shuffled

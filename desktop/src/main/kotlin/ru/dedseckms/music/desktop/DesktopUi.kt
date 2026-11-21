@@ -147,6 +147,7 @@ private val LocalSample = staticCompositionLocalOf { false }
             itemsIndexed(s.queue, key = { index, song -> "$index:${song.id}" }) { index, song ->
                 ListItem(headlineContent = { Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(song.artist, maxLines = 1) },
                     leadingContent = { Icon(if (index == s.cursor) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote, null) },
+                    trailingContent = { Row(verticalAlignment = Alignment.CenterVertically) { ExplicitBadge(song); if (s.isAdmin) PlayerContentRating(c, song) } },
                     modifier = Modifier.clickable { c.select(index); compactQueue = false })
             }
         }
@@ -226,7 +227,7 @@ private val LocalSample = staticCompositionLocalOf { false }
             item { LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) { items(s.albums.take(12), key = Album::id) { album -> AlbumTile(album, Modifier.width(142.dp)) { c.album(album) } } } }
         }
         item { Section("Включи что-нибудь любимое", "ТВОЯ МУЗЫКА") }
-        itemsIndexed(s.songs.take(10), key = { i, song -> "$i:${song.id}" }) { index, song -> TrackRow(song, index, s, { c.play(s.songs, index) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null) }
+        itemsIndexed(s.songs.take(10), key = { i, song -> "$i:${song.id}" }) { index, song -> TrackRow(song, index, s, { c.play(s.songs, index) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null, if (s.isAdmin) ({ rating -> c.setContentRating(song, rating) }) else null) }
         item { Spacer(Modifier.height(12.dp)) }
     }
 }
@@ -248,7 +249,7 @@ private val LocalSample = staticCompositionLocalOf { false }
             s.filter == "Жанры" && s.tab in listOf("Поиск", "Музыка") -> LazyColumn { items(s.genres.filter { s.query.isBlank() || SearchText.matches(s.query, it.name) }, key = Genre::name) { g -> ListItem(headlineContent = { Text(g.name) }, supportingContent = { Text("${g.songCount} треков · по тегам файлов") }, leadingContent = { Icon(Icons.Rounded.GraphicEq, null) }, modifier = Modifier.clickable { c.genre(g) }) } }
             else -> LazyColumn {
                 if (songs.isEmpty() && !s.busy && !s.searching) item { Empty("Здесь пока тихо", "Добавь музыку, измени запрос или создай свой плейлист") }
-                itemsIndexed(songs, key = { index, song -> "$index:${song.id}" }) { index, song -> TrackRow(song, index, s, { c.play(songs, index, source) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null) }
+                itemsIndexed(songs, key = { index, song -> "$index:${song.id}" }) { index, song -> TrackRow(song, index, s, { c.play(songs, index, source) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, null, if (s.isAdmin) ({ rating -> c.setContentRating(song, rating) }) else null) }
                 if (s.tab == "Музыка" && s.more) item { OutlinedButton(c::more, enabled = !s.busy, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) { Text("Ещё треки") } }
             }
         }
@@ -259,10 +260,12 @@ private val LocalSample = staticCompositionLocalOf { false }
     LazyColumn(contentPadding = PaddingValues(horizontal = 26.dp, vertical = 10.dp)) {
         item { Row(Modifier.padding(bottom = 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) { Cover(songs.firstOrNull()?.coverArt.orEmpty(), page.title, Modifier.size(138.dp), 28); Column { Text(when (page.kind) { "playlist" -> "ЛИЧНЫЙ ПЛЕЙЛИСТ"; "album" -> "АЛЬБОМ"; "artist" -> "ИСПОЛНИТЕЛЬ"; else -> "КОЛЛЕКЦИЯ" }, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp, letterSpacing = 2.sp); Text(page.title, style = MaterialTheme.typography.headlineMedium); Text("${songs.size} треков", color = MaterialTheme.colorScheme.onSurfaceVariant); Button({ c.playCollection(songs, source) }, enabled = songs.isNotEmpty(), modifier = Modifier.padding(top = 12.dp)) { Icon(Icons.Rounded.PlayArrow, null); Text("Слушать") } } } }
         if (songs.isNotEmpty() && page.kind != "offline") item { OutlinedButton({ c.downloadAll(songs) }) { Icon(Icons.Rounded.Download, null); Text(" Скачать список · ${songs.size}") } }
-        itemsIndexed(songs, key = { i, song -> "$i:${song.id}" }) { i, song -> TrackRow(song, i, s, { c.play(songs, i, source) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, if (page.playlist?.readOnly == false) ({ remove(i) }) else null) }
+        itemsIndexed(songs, key = { i, song -> "$i:${song.id}" }) { i, song -> TrackRow(song, i, s, { c.play(songs, i, source) }, { c.favorite(song) }, { add(song) }, { c.download(song) }, if (page.playlist?.readOnly == false) ({ remove(i) }) else null, if (s.isAdmin) ({ rating -> c.setContentRating(song, rating) }) else null) }
     }
 }
-@Composable internal fun TrackRow(song: Song, index: Int, s: DesktopState, play: () -> Unit, favorite: () -> Unit, add: () -> Unit, download: () -> Unit, remove: (() -> Unit)?) {
+@Composable internal fun TrackRow(song: Song, index: Int, s: DesktopState, play: () -> Unit, favorite: () -> Unit, add: () -> Unit, download: () -> Unit, remove: (() -> Unit)?, rate: ((ContentRating?) -> Unit)? = null) {
+    var ratingDialog by remember { mutableStateOf(false) }
+    if (ratingDialog && s.isAdmin && rate != null) ContentRatingDialog(song, { ratingDialog = false; rate(it) }, { ratingDialog = false })
     var menu by remember { mutableStateOf(false) }
     val active = s.now?.id == song.id
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (active) MaterialTheme.colorScheme.primaryContainer.copy(.35f) else Color.Transparent).clickable(onClick = play).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -275,6 +278,7 @@ private val LocalSample = staticCompositionLocalOf { false }
         Box { IconButton({ menu = true }, Modifier.size(28.dp)) { Icon(Icons.Rounded.MoreHoriz, "Меню трека", Modifier.size(19.dp)) }; DropdownMenu(menu, { menu = false }) {
             DropdownMenuItem({ Text("В плейлист") }, { menu = false; add() }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null) })
             DropdownMenuItem({ Text(if (s.offline.any { it.id == song.id }) "Уже скачано" else if (song.id in s.downloadIds) "В очереди" else "Скачать") }, { menu = false; download() }, enabled = ContentPolicy.allowed(song, s.childMode) && s.offline.none { it.id == song.id } && song.id !in s.downloadIds, leadingIcon = { Icon(Icons.Rounded.Download, null) })
+            if (s.isAdmin && rate != null) DropdownMenuItem({ Text("Маркировка контента") }, { menu = false; ratingDialog = true }, leadingIcon = { Icon(Icons.Rounded.Label, null) })
             remove?.let { DropdownMenuItem({ Text("Убрать из плейлиста") }, { menu = false; it() }, leadingIcon = { Icon(Icons.Rounded.RemoveCircleOutline, null) }) }
         } }
     }
@@ -291,14 +295,14 @@ private val LocalSample = staticCompositionLocalOf { false }
         HorizontalDivider(Modifier.padding(vertical = 22.dp), color = MaterialTheme.colorScheme.outlineVariant)
         Text(if (song == null) "СВОЯ МУЗЫКА. БЕЗ ГРАНИЦ." else "ДАЛЬШЕ В ОЧЕРЕДИ", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 1.sp)
         if (song == null) { Spacer(Modifier.height(16.dp)); Text("Один сервер. Личные плейлисты. Любимые треки на всех твоих устройствах.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 22.sp) }
-        LazyColumn(Modifier.padding(top = 12.dp)) { itemsIndexed(s.queue.drop(s.cursor + 1).take(15), key = { i, song -> "$i:${song.id}" }) { index, next -> Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { c.select(s.cursor + index + 1) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Cover(next.coverArt, next.album, Modifier.size(35.dp), 8); Spacer(Modifier.width(10.dp)); ExplicitBadge(next); Column(Modifier.weight(1f)) { Text(next.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp); Text(next.artist, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } } } }
+        LazyColumn(Modifier.padding(top = 12.dp)) { itemsIndexed(s.queue.drop(s.cursor + 1).take(15), key = { i, song -> "$i:${song.id}" }) { index, next -> Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { c.select(s.cursor + index + 1) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Cover(next.coverArt, next.album, Modifier.size(35.dp), 8); Spacer(Modifier.width(10.dp)); ExplicitBadge(next); Column(Modifier.weight(1f)) { Text(next.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp); Text(next.artist, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; if (s.isAdmin) PlayerContentRating(c, next) } } }
     }
 }
 @Composable private fun BottomPlayer(c: DesktopController, s: DesktopState, audio: AudioState, add: (Song) -> Unit, queue: () -> Unit, lyricsVisible: Boolean, lyrics: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Row(Modifier.fillMaxWidth().height(112.dp).padding(horizontal = 28.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(28.dp)) {
             Row(Modifier.width(250.dp), verticalAlignment = Alignment.CenterVertically) { Cover(s.now?.coverArt.orEmpty(), s.now?.album ?: "DedSec", Modifier.size(58.dp), 16); Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(s.now?.title ?: "Поймай свой ритм", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Text(s.now?.artist ?: "Выбери трек для воспроизведения", maxLines = 1, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-            s.now?.let { ExplicitBadge(it) }
+            s.now?.let { ExplicitBadge(it); if (s.isAdmin) PlayerContentRating(c, it) }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!s.wave) IconButton(c::shuffle, enabled = s.now != null) { Icon(Icons.Rounded.Shuffle, "Перемешать", Modifier.size(19.dp), tint = if (s.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -425,4 +429,32 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
             Text("E", modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp).semantics { contentDescription = "Ненормативная лексика / взрослый контент" }, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+@Composable private fun PlayerContentRating(c: DesktopController, song: Song) {
+    var menu by remember { mutableStateOf(false) }; var dialog by remember { mutableStateOf(false) }
+    Box {
+        IconButton({ menu = true }, Modifier.size(30.dp)) { Icon(Icons.Rounded.MoreHoriz, "Меню текущего трека", Modifier.size(19.dp)) }
+        DropdownMenu(menu, { menu = false }) {
+            DropdownMenuItem({ Text("Маркировка контента") }, { menu = false; dialog = true }, leadingIcon = { Icon(Icons.Rounded.Label, null) })
+        }
+    }
+    if (dialog) ContentRatingDialog(song, { dialog = false; c.setContentRating(song, it) }, { dialog = false })
+}
+
+@Composable private fun ContentRatingDialog(song: Song, save: (ContentRating?) -> Unit, dismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = dismiss, title = { Text("Маркировка контента") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(song.title, style = MaterialTheme.typography.titleMedium)
+            Text("Изменение действует для всех слушателей сервера.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            listOf(ContentRating.EXPLICIT to "E · Взрослый контент", ContentRating.CLEAN to "Без взрослого контента", null to "По данным источника").forEach { (rating, title) ->
+                val selected = if (rating == null) !song.contentRatingOverride else song.contentRatingOverride && song.contentRating == rating
+                Surface(onClick = { save(rating) }, shape = RoundedCornerShape(14.dp), color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        RadioButton(selected, null); Text(title, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }, confirmButton = {}, dismissButton = { TextButton(dismiss) { Text("Отмена") } })
 }

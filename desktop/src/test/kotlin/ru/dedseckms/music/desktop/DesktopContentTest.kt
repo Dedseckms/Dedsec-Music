@@ -103,4 +103,50 @@ class DesktopContentTest {
             assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
         } finally { c.close() }
     }
+    @Test fun manualCleanRatingAllowsUnknownAndExplicitResultInvalidatesChildPlayback() {
+        val c = controller()
+        try {
+            state(c).value = DesktopState(loggedIn = true, isAdmin = true, songs = listOf(unknown), favorites = listOf(unknown),
+                offline = listOf(unknown), page = DesktopPage("album", "Album", listOf(unknown)),
+                search = SearchResults(listOf(unknown), emptyList()))
+            c.childMode(true)
+            c.applyContentRating(unknown.id, ContentRating.CLEAN, true)
+            assertTrue(c.state.value.songs.single().contentRatingOverride)
+            assertEquals(ContentRating.CLEAN, c.state.value.favorites.single().contentRating)
+            assertEquals(ContentRating.CLEAN, c.state.value.offline.single().contentRating)
+            assertEquals(ContentRating.CLEAN, c.state.value.page!!.songs.single().contentRating)
+            assertEquals(ContentRating.CLEAN, c.state.value.search.songs.single().contentRating)
+            c.play(c.state.value.songs)
+            assertEquals(unknown.id, c.state.value.now?.id)
+            val oldPlay = field(c, "playJob").get(c) as Job
+            c.applyContentRating(unknown.id, ContentRating.EXPLICIT, true)
+            assertTrue(oldPlay.isCancelled); assertNull(c.state.value.now); assertTrue(c.state.value.queue.isEmpty())
+            assertEquals(ContentRating.EXPLICIT, c.state.value.songs.single().contentRating)
+            c.applyContentRating(unknown.id, ContentRating.UNKNOWN, false)
+            assertFalse(c.state.value.songs.single().contentRatingOverride)
+            c.play(c.state.value.songs)
+            assertNull(c.state.value.now); assertEquals(ContentPolicy.BLOCKED_MESSAGE, c.state.value.message)
+        } finally { c.close() }
+    }
+    @Test fun manualRatingUpdatesCachedMetadataWithoutDeletingAudioOrChangingAnotherAccount() {
+        val credentials = Credentials("https://music.example", "test", "test")
+        val local = DesktopStore(credentials, temp.newFolder().toPath())
+        val other = DesktopStore(Credentials(credentials.server, "other", "test"), temp.newFolder().toPath())
+        for (store in listOf(local, other)) {
+            Files.createDirectories(store.audio(unknown).parent); Files.write(store.audio(unknown), byteArrayOf(1, 2, 3))
+            store.downloaded(unknown, 3); store.record(unknown); store.queueDownloads(listOf(unknown))
+        }
+        local.updateContentRating(unknown.id, ContentRating.CLEAN, true)
+        for (song in listOf(local.offline().single(), local.history().single().song, local.pendingDownloads().single())) {
+            assertEquals(ContentRating.CLEAN, song.contentRating); assertTrue(song.contentRatingOverride)
+        }
+        assertContentEquals(byteArrayOf(1, 2, 3), Files.readAllBytes(local.audio(unknown)))
+        assertEquals(ContentRating.UNKNOWN, other.offline().single().contentRating)
+        val reopened = DesktopStore(credentials, local.directory)
+        assertEquals(ContentRating.CLEAN, reopened.offline().single().contentRating)
+        reopened.updateContentRating(unknown.id, ContentRating.UNKNOWN, false)
+        assertFalse(reopened.offline().single().contentRatingOverride)
+        assertTrue(Files.exists(local.audio(unknown)))
+    }
+
 }

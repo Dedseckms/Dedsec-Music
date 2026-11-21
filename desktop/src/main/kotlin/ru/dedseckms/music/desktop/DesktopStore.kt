@@ -45,6 +45,29 @@ class DesktopStore(val credentials: Credentials, val directory: Path = DesktopPa
         return (current + read("offline.json").optJSONArray("items").objects().mapNotNull(::offlineEntry)).distinctBy(Song::id)
     }
     fun downloaded(song: Song, bytes: Long) = synchronized(lock) { write("offline-index/${sha256(song.id)}.json", JSONObject().put("song", song.json()).put("bytes", bytes)) }
+    /** Rewrite account metadata only; cached audio bytes are never replaced or removed. */
+    fun updateContentRating(id: String, rating: ContentRating, overridden: Boolean) = synchronized(lock) {
+        fun update(song: Song) = song.copy(contentRating = rating, contentRatingOverride = overridden)
+        fun entry(value: JSONObject): JSONObject {
+            val song = value.optJSONObject("song") ?: return value
+            if (song.optString("id") == id) value.put("song", update(Song.parse(song)).json())
+            return value
+        }
+        val index = "offline-index/${sha256(id)}.json"
+        if (Files.isRegularFile(directory.resolve(index))) write(index, entry(read(index)))
+        val legacy = read("offline.json")
+        legacy.optJSONArray("items")?.let { items ->
+            for (i in 0 until items.length()) items.optJSONObject(i)?.let(::entry)
+            write("offline.json", legacy)
+        }
+        val history = read("history.json")
+        history.optJSONArray("items")?.let { items ->
+            for (i in 0 until items.length()) items.optJSONObject(i)?.let(::entry)
+            write("history.json", history)
+        }
+        val queued = "download-queue/${sha256(id)}.json"
+        if (Files.isRegularFile(directory.resolve(queued))) write(queued, update(Song.parse(read(queued))).json())
+    }
     fun removeOffline(song: Song) = synchronized(lock) { Files.deleteIfExists(audio(song)); Files.deleteIfExists(directory.resolve("offline-index/${sha256(song.id)}.json")); Unit }
     private fun write(name: String, value: JSONObject) {
         Files.createDirectories(directory.resolve(name).parent)
