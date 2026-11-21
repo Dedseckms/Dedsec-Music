@@ -605,6 +605,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
 
 @Composable private fun SongActions(song: Song, state: AppState, vm: MusicViewModel, add: () -> Unit, remove: (() -> Unit)? = null, dismiss: () -> Unit) {
     var adjusting by remember { mutableStateOf(false) }
+    var rating by remember(song.id) { mutableStateOf(false) }
     var gain by remember(song.id) { mutableFloatStateOf(vm.trackGain(song).toFloat()) }
     ModalBottomSheet(dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
@@ -616,6 +617,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             ActionRow("Добавить в плейлист", Icons.AutoMirrored.Rounded.PlaylistAdd, add)
             remove?.let { ActionRow("Убрать из этого плейлиста", Icons.Rounded.PlaylistRemove, it) }
             ActionRow("Громкость трека", Icons.AutoMirrored.Rounded.VolumeUp) { adjusting = true }
+            if (state.isAdmin) ActionRow("Маркировка контента", Icons.Rounded.Label) { rating = true }
             val genres = song.genres.ifEmpty { listOf(song.genre) }.filter(String::isNotBlank)
             if (genres.isNotEmpty()) Text("Теги жанра: ${genres.joinToString()}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             ActionRow("Открыть исполнителя", Icons.Rounded.Person) { vm.openArtist(song); dismiss() }
@@ -623,6 +625,7 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             else ActionRow("Скачать на телефон", Icons.Rounded.Download) { vm.download(song); dismiss() }
         }
     }
+    if (rating && state.isAdmin) ContentRatingDialog(song, state.contentRatingBusy, { value -> vm.setContentRating(song, value); rating = false }, { rating = false })
     if (adjusting) AlertDialog(onDismissRequest = { adjusting = false }, title = { Text("Громкость трека") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Тише или громче только этот трек. Настройка сохраняется в твоём аккаунте на этом телефоне.")
@@ -691,4 +694,24 @@ internal fun time(value: Long): String { val seconds = value.coerceAtLeast(0) / 
             .semantics { contentDescription = "Взрослый контент" },
             style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
     }
+}
+
+@Composable internal fun ContentRatingDialog(song: Song, busy: Boolean, save: (ContentRating?) -> Unit, dismiss: () -> Unit) {
+    var selected by remember(song.id) { mutableStateOf(if (song.contentRatingOverride) song.contentRating.wire else "source") }
+    val options = listOf("explicit" to "E · Взрослый контент", "clean" to "Без взрослого контента", "source" to "По данным источника")
+    AlertDialog(onDismissRequest = dismiss, title = { Text("Маркировка контента") },
+        text = { Column {
+            Text(song.title, style = MaterialTheme.typography.titleSmall)
+            Text("Изменение применяется ко всем слушателям. Выбирай отметку после проверки трека.", style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
+            options.forEach { (value, label) ->
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(enabled = !busy) { selected = value }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected == value, { selected = value }, enabled = !busy)
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        } },
+        confirmButton = { TextButton({ save(if (selected == "source") null else ContentRating.parse(selected)) }, enabled = !busy) { Text("Сохранить") } },
+        dismissButton = { TextButton(dismiss) { Text("Отмена") } })
 }

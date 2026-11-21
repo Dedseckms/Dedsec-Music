@@ -25,6 +25,30 @@ class ChildModeTest {
         }
     }
 
+    @Test fun manualRatingRefreshesOfflineAndLibraryMetadataWithoutChangingAudio() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val account = java.util.UUID.randomUUID().toString().replace("-", "")
+        val store = LocalStore(context, account)
+        val song = Song("rating-fixture", "Test", "Artist")
+        val audio = byteArrayOf(1, 3, 5, 7)
+        try {
+            store.cacheSongs(listOf(song)); store.cacheFavorites(listOf(song)); store.record(song); store.queueDownload(song)
+            store.audioFile(song.id).writeBytes(audio); store.downloaded(song, audio.size.toLong())
+            store.updateContentRating(song.id, ContentRating.CLEAN, true)
+            val copies = store.cachedSongs() + store.cachedFavorites() + store.history().map { it.song } + store.pendingDownloads() + store.offline()
+            assertEquals(5, copies.size)
+            copies.forEach { assertEquals(ContentRating.CLEAN, it.contentRating); assertTrue(it.contentRatingOverride) }
+            assertArrayEquals(audio, store.audioFile(song.id).readBytes())
+            store.updateContentRating(song.id, ContentRating.UNKNOWN, false)
+            assertFalse(store.offline().single().contentRatingOverride)
+            assertFalse(ContentPolicy.allowed(store.offline().single(), true))
+            assertArrayEquals(audio, store.audioFile(song.id).readBytes())
+        } finally {
+            java.io.File(context.filesDir, "accounts/$account").deleteRecursively()
+            context.getSharedPreferences("account_$account", 0).edit().clear().commit()
+        }
+    }
+
     @Test fun mediaSessionSongExtrasRetainRatingsAndFailClosedForOldSongs() {
         for (rating in ContentRating.entries) {
             val song = Song("test", "Test", "Artist", contentRating = rating)

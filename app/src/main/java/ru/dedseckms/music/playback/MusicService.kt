@@ -72,6 +72,18 @@ class MusicService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .build()
+        scope.launch { app.contentRatingChanges.collect { (account, song) ->
+            if (account != app.credentials.activeId()) return@collect
+            app.playbackSongs["$account:${song.id}"] = song
+            if (app.local()?.childMode() == true) { resetPlayback(); return@collect }
+            queueWindow?.updateSongs { value -> if (value.id == song.id) value.copy(contentRating = song.contentRating, contentRatingOverride = song.contentRatingOverride) else value }
+            for (index in 0 until player.mediaItemCount) {
+                val old = player.getMediaItemAt(index)
+                if (old.mediaId != song.id) continue
+                val extras = Bundle(old.mediaMetadata.extras ?: Bundle.EMPTY).apply { putString("song", song.json().toString()) }
+                player.replaceMediaItem(index, old.buildUpon().setMediaMetadata(old.mediaMetadata.buildUpon().setExtras(extras).build()).build())
+            }
+        } }
         scope.launch { app.contentPolicyChanges.collect { resetPlayback() } }
         scope.launch { app.accountChanges.collect {
             resetPlayback()
