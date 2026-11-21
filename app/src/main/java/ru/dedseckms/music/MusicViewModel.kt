@@ -93,6 +93,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val profileTask = LatestTask()
     private val tabDestinations = mutableMapOf<Int, TabDestination>()
     private var lastProfileRefresh = 0L
+    private val contentRatingMutex = kotlinx.coroutines.sync.Mutex()
     private val profileLock = kotlinx.coroutines.sync.Mutex()
     private var requestedSong: Song? = null
     private val uploadTags = mutableMapOf<String, UploadTags>()
@@ -493,7 +494,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun playCollection(songs: List<Song>, source: String = "") {
-        val allowed = songs.filter { ContentPolicy.allowed(it, state.value.childMode) }
+        val store = local()
+        val allowed = songs.map { store?.contentRatedSong(it) ?: it }.filter { ContentPolicy.allowed(it, state.value.childMode) }
         if (songs.isNotEmpty() && allowed.isEmpty()) { toast(ContentPolicy.BLOCKED_MESSAGE); return }
         play(allowed, source = source)
     }
@@ -507,7 +509,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (songs.isEmpty()) { toast("Здесь пока нет треков"); return }
         val player = controller ?: run { toast("Плеер ещё запускается"); return }
         val account = app.credentials.activeId() ?: return
-        val selection = ContentPolicy.selection(songs, index.coerceIn(songs.indices), state.value.childMode) ?: run { toast(ContentPolicy.BLOCKED_MESSAGE); return }
+        val store = local()
+        val selection = ContentPolicy.selection(songs.map { store?.contentRatedSong(it) ?: it }, index.coerceIn(songs.indices), state.value.childMode) ?: run { toast(ContentPolicy.BLOCKED_MESSAGE); return }
         requestedSong = selection.songs[selection.index]
         player.pause()
         mutable.update { it.copy(now = requestedSong, playbackSource = playbackSourceLabel(source, mix, mood), playing = false, buffering = true, position = 0, duration = (requestedSong?.duration ?: 0) * 1000L) }
@@ -690,10 +693,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val revision = generation
         val account = app.credentials.activeId() ?: return
         mutable.update { it.copy(contentRatingBusy = true) }
-        viewModelScope.launch {
+        viewModelScope.launch { contentRatingMutex.withLock {
             try {
+                if (revision != generation || app.credentials.activeId() != account || !state.value.isAdmin) return@withLock
                 val result = profile.await { setContentRating(song.id, rating) }
-                if (revision != generation || app.credentials.activeId() != account) return@launch
+                if (revision != generation || app.credentials.activeId() != account) return@withLock
                 fun updated(value: Song): Song = if (value.id == song.id) value.copy(contentRating = result.rating, contentRatingOverride = result.overridden) else value
                 fun updatedList(value: List<Song>) = value.map(::updated)
                 val changed = updated(song)
@@ -715,18 +719,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     uploads = current.uploads.map { it.copy(indexedSong = it.indexedSong?.let(::updated)) }) }
                 if (state.value.childMode) childMode(true) else app.contentRatingChanges.emit(account to changed)
                 withContext(Dispatchers.IO) {
-                    store.updateContentRating(song.id, result.rating, result.overridden)
+                    store.updateContentRating(song, result.rating, result.overridden)
                     if (!ContentPolicy.allowed(changed, store.childMode())) {
                         work.getWorkInfosByTag("downloads-$account").get().filter { "track:${song.id}" in it.tags && !it.state.isFinished }
                             .forEach { work.cancelWorkById(it.id).result.get() }
                         store.finishDownload(song.id)
                     }
                 }
-                if (revision == generation) toast("Маркировка контента обновлена")
+                if (revision == generation && app.credentials.activeId() == account) toast("Маркировка контента обновлена")
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) { if (revision == generation) toast(safeMessage(error)) }
             finally { if (revision == generation) mutable.update { it.copy(contentRatingBusy = false) } }
-        }
+        } }
     }
     fun childMode(enabled: Boolean) {
         local()?.childMode(enabled)
