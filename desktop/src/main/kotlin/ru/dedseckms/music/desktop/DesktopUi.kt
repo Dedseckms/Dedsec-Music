@@ -379,7 +379,7 @@ private fun formatTime(ms: Long) = "${ms.coerceAtLeast(0) / 60000}:${(ms.coerceA
         item { Section("Безопасное прослушивание") }
         item { Surface(shape = Rounded, color = MaterialTheme.colorScheme.surfaceContainer) {
             Row(Modifier.fillMaxWidth().padding(22.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                Column(Modifier.weight(1f)) { Text("Детский режим"); Text("Только треки с подтверждённой чистой маркировкой. Взрослый контент и треки с неизвестной маркировкой недоступны. При переключении воспроизведение остановится.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column(Modifier.weight(1f)) { Text("Детский режим"); Text("Треки с маркировкой E недоступны. Музыка без маркировки остаётся доступной. При переключении воспроизведение остановится.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Switch(s.childMode, c::childMode)
             }
         } }
