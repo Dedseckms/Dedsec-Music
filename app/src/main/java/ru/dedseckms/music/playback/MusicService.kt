@@ -75,7 +75,9 @@ class MusicService : MediaLibraryService() {
         scope.launch { app.contentRatingChanges.collect { (account, song) ->
             if (account != app.credentials.activeId()) return@collect
             app.playbackSongs["$account:${song.id}"] = song
-            if (app.local()?.childMode() == true) { resetPlayback(); return@collect }
+            if (app.local()?.childMode() == true && !allowed(song) &&
+                ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId == song.id } ||
+                    queueWindow?.request?.songs?.any { it.id == song.id } == true)) { resetPlayback(); return@collect }
             queueWindow?.updateSongs { value -> if (value.id == song.id) value.copy(contentRating = song.contentRating, contentRatingOverride = song.contentRatingOverride) else value }
             for (index in 0 until player.mediaItemCount) {
                 val old = player.getMediaItemAt(index)

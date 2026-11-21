@@ -165,34 +165,12 @@ class LocalStore(private val context: Context, val accountId: String) {
             check(temp.renameTo(File(offlineIndex(), "${sha256(song.id)}.json")))
         } finally { temp.delete() }
     }
-    /** Refresh cached metadata without touching any published audio file. */
+    /** All cache readers and writers merge this durable snapshot, so changing a rating is constant work. */
     fun updateContentRating(song: Song, rating: ContentRating, overridden: Boolean) = synchronized(lock) {
-        val id = song.id
         val snapshot = JSONObject().put("fingerprint", contentFingerprint(song)).put("rating", rating.wire).put("overridden", overridden)
             .put("updatedAt", System.currentTimeMillis())
-        check(prefs.edit().putString("content_rating_${sha256(id)}", snapshot.toString()).commit()) {
+        check(prefs.edit().putString("content_rating_${sha256(song.id)}", snapshot.toString()).commit()) {
             "Не удалось сохранить маркировку контента"
-        }
-        fun update(value: Any?) {
-            when (value) {
-                is JSONObject -> {
-                    if (value.optString("id") == id && value.has("title") && contentFingerprint(Song.parse(value)) == contentFingerprint(song)) {
-                        value.put("explicitStatus", rating.wire).put("contentRatingOverride", overridden)
-                    }
-                    value.keys().asSequence().toList().forEach { update(value.opt(it)) }
-                }
-                is JSONArray -> for (index in 0 until value.length()) update(value.opt(index))
-            }
-        }
-        val files = listOf("library.json", "favorites.json", "history.json", "offline.json").map { File(directory, it) } +
-            offlineIndex().listFiles().orEmpty().filter { it.extension == "json" } +
-            queueDirectory().listFiles().orEmpty().filter { it.extension == "json" }
-        for (file in files.filter(File::isFile)) {
-            val value = try { JSONObject(file.readText()) } catch (_: Exception) { continue }
-            update(value)
-            val temporary = File.createTempFile("rating-", ".tmp", file.parentFile)
-            try { temporary.writeText(value.toString()); check(temporary.renameTo(file)) { "Не удалось обновить маркировку в кэше" } }
-            finally { temporary.delete() }
         }
     }
     fun removeDownload(id: String) = synchronized(lock) {
