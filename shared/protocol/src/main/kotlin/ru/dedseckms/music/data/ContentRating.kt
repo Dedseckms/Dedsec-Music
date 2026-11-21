@@ -8,10 +8,10 @@ enum class ContentRating(val wire: String) {
     }
 }
 
-/** Unknown recordings fail closed in child mode, including offline and old cached songs. */
+/** Child mode excludes explicit recordings; unrated recordings remain available. */
 object ContentPolicy {
-    const val BLOCKED_MESSAGE = "Трек недоступен в детском режиме: взрослый контент или неизвестная маркировка"
-    fun allowed(song: Song, childMode: Boolean): Boolean = !childMode || song.contentRating == ContentRating.CLEAN
+    const val BLOCKED_MESSAGE = "Трек недоступен в детском режиме: метка взрослого контента E"
+    fun allowed(song: Song, childMode: Boolean): Boolean = !childMode || song.contentRating != ContentRating.EXPLICIT
     fun selection(songs: List<Song>, selected: Int, childMode: Boolean): ContentSelection? {
         if (selected !in songs.indices || !allowed(songs[selected], childMode)) return null
         val filtered = songs.filter { allowed(it, childMode) }

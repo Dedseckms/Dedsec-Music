@@ -46,7 +46,7 @@ class ContentRatingsProtocolTest {
             val data = root(); ratings.enrich(data); ratings.enrich(root())
             val song = Song.parse(data.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(0))
             assertEquals(ContentRating.UNKNOWN, song.contentRating)
-            assertFalse(ContentPolicy.allowed(song, true)); assertEquals(2, server.requestCount)
+            assertTrue(ContentPolicy.allowed(song, true)); assertEquals(2, server.requestCount)
             assertEquals(ContentRating.CLEAN, Song.parse(data.getJSONObject("searchResult3").getJSONArray("song").getJSONObject(4)).contentRating)
         }
     }
@@ -55,10 +55,10 @@ class ContentRatingsProtocolTest {
             server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
             server.enqueue(MockResponse().setBody("""{"songs":[{"id":"a","title":"A","explicitStatus":"explicit"},{"id":"c","title":"C","explicitStatus":"clean"},{"id":"u","title":"U"}],"analysis":{"indexed":3,"total":3}}"""))
             val api = ProfileApi(Credentials(server.url("/").toString(), "u", "p"), allowLocalHttpForTests = true)
-            assertEquals(listOf("c"), api.radio(MixMode.BALANCED, MixMood.ANY, childMode = true).songs.map(Song::id))
+            assertEquals(listOf("c", "u"), api.radio(MixMode.BALANCED, MixMood.ANY, childMode = true).songs.map(Song::id))
         }
     }
-    @Test fun unconfirmedEntriesBeyond500And1000FailClosed() {
+    @Test fun unconfirmedEntriesBeyond500And1000RemainUnratedAndPlayable() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"token":"test"}"""))
             server.enqueue(MockResponse().setBody("""{"ratings":{"clean0":"clean"}}"""))
@@ -67,7 +67,11 @@ class ContentRatingsProtocolTest {
             repeat(1002) { songs.put(JSONObject().put("id", "clean$it").put("title", "S").put("explicitStatus", "clean")) }
             ratings.enrich(JSONObject().put("playlist", JSONObject().put("entry", songs)))
             assertTrue(ContentPolicy.allowed(Song.parse(songs.getJSONObject(0)), true))
-            for (index in listOf(500, 1000, 1001)) assertFalse(ContentPolicy.allowed(Song.parse(songs.getJSONObject(index)), true))
+            for (index in listOf(500, 1000, 1001)) {
+                val song = Song.parse(songs.getJSONObject(index))
+                assertEquals(ContentRating.UNKNOWN, song.contentRating)
+                assertTrue(ContentPolicy.allowed(song, true))
+            }
             server.takeRequest()
             assertEquals(500, JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("ids").length())
         }

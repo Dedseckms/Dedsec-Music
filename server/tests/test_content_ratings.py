@@ -162,7 +162,7 @@ class RatingsTests(unittest.TestCase):
             self.assertEqual(call({'ids':['a']*501})[0],400)
             self.assertEqual(call({'ids':['a']},method='GET')[0],405)
 
-    def test_child_radio_filters_before_taste_and_all_fallbacks(self):
+    def test_child_radio_blocks_only_explicit_before_taste_and_all_fallbacks(self):
         rows={key:fixtures.song(key,starred=True) for key in ('clean','explicit','unknown')}
         rows['clean']['explicitStatus']='clean';rows['explicit']['explicitStatus']='explicit'
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,11 +170,12 @@ class RatingsTests(unittest.TestCase):
             for mode in ('FAVORITES','DISCOVERY','BALANCED'):
                 with engine.db() as db:db.execute('DELETE FROM served')
                 result=engine._mix('u',radio.request_mix({'childMode':True,'mode':mode}))
-                self.assertEqual([s['id'] for s in result['songs']],['clean'])
-                self.assertEqual(result['analysis']['total'],1)
-                self.assertEqual(engine.index.priority,['clean'])
+                self.assertEqual({s['id'] for s in result['songs']},{'clean','unknown'})
+                self.assertEqual(result['analysis']['total'],2)
+                self.assertEqual(set(engine.index.priority),{'clean','unknown'})
             rows['clean']['explicitStatus']=''
-            self.assertEqual(engine._mix('u',radio.request_mix({'childMode':True}))['songs'],[])
+            with engine.db() as db:db.execute('DELETE FROM served')
+            self.assertEqual({s['id'] for s in engine._mix('u',radio.request_mix({'childMode':True}))['songs']},{'clean','unknown'})
         for invalid in (0,1,None,'true'):
             with self.assertRaises(radio.Rejected):radio.request_mix({'childMode':invalid})
 

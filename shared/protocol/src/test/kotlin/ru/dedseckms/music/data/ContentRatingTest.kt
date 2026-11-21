@@ -14,8 +14,8 @@ class ContentRatingTest {
     @Test fun blockedSelectionNeverSilentlyPlaysAnotherRecording() {
         val songs = listOf(song("explicit", ContentRating.EXPLICIT), song("clean", ContentRating.CLEAN), song("old", ContentRating.UNKNOWN))
         assertNull(ContentPolicy.selection(songs, 0, true))
-        assertNull(ContentPolicy.selection(songs, 2, true))
-        assertEquals(ContentSelection(listOf(songs[1]), 0), ContentPolicy.selection(songs, 1, true))
+        assertEquals(ContentSelection(listOf(songs[1], songs[2]), 1), ContentPolicy.selection(songs, 2, true))
+        assertEquals(ContentSelection(listOf(songs[1], songs[2]), 0), ContentPolicy.selection(songs, 1, true))
         assertEquals(ContentSelection(songs, 0), ContentPolicy.selection(songs, 0, false))
     }
     @Test fun filteringPreservesRepeatedEntriesAndSelectedOccurrence() {

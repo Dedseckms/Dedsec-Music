@@ -34,14 +34,16 @@ class ChildModeTest {
         try {
             store.cacheSongs(listOf(song)); store.cacheFavorites(listOf(song)); store.record(song); store.queueDownload(song)
             store.audioFile(song.id).writeBytes(audio); store.downloaded(song, audio.size.toLong())
+            val originalCache = java.io.File(context.filesDir, "accounts/$account/library.json").readBytes()
             store.updateContentRating(song, ContentRating.CLEAN, true)
+            assertArrayEquals(originalCache, java.io.File(context.filesDir, "accounts/$account/library.json").readBytes())
             val copies = store.cachedSongs() + store.cachedFavorites() + store.history().map { it.song } + store.pendingDownloads() + store.offline()
             assertEquals(5, copies.size)
             copies.forEach { assertEquals(ContentRating.CLEAN, it.contentRating); assertTrue(it.contentRatingOverride) }
             assertArrayEquals(audio, store.audioFile(song.id).readBytes())
             store.updateContentRating(song, ContentRating.UNKNOWN, false)
             assertFalse(store.offline().single().contentRatingOverride)
-            assertFalse(ContentPolicy.allowed(store.offline().single(), true))
+            assertTrue(ContentPolicy.allowed(store.offline().single(), true))
             assertArrayEquals(audio, store.audioFile(song.id).readBytes())
         } finally {
             java.io.File(context.filesDir, "accounts/$account").deleteRecursively()
@@ -76,7 +78,7 @@ class ChildModeTest {
             reloaded.cacheSongs(listOf(replacedRecording))
             assertEquals(ContentRating.UNKNOWN, reloaded.cachedSongs().single().contentRating)
             assertFalse(reloaded.cachedSongs().single().contentRatingOverride)
-            assertFalse(ContentPolicy.allowed(reloaded.cachedSongs().single(), true))
+            assertTrue(ContentPolicy.allowed(reloaded.cachedSongs().single(), true))
             reloaded.updateContentRating(staleClean, ContentRating.UNKNOWN, false)
             reloaded.downloaded(staleClean, audio.size.toLong())
             assertEquals(ContentRating.UNKNOWN, reloaded.offline().single().contentRating)
@@ -112,14 +114,14 @@ class ChildModeTest {
         }
     }
 
-    @Test fun mediaSessionSongExtrasRetainRatingsAndFailClosedForOldSongs() {
+    @Test fun mediaSessionSongExtrasRetainRatingsAndAllowUnmarkedSongs() {
         for (rating in ContentRating.entries) {
             val song = Song("test", "Test", "Artist", contentRating = rating)
             val restored = MusicService.songFromItem(MusicService.item(song))!!
             assertEquals(rating, restored.contentRating)
-            assertEquals(rating == ContentRating.CLEAN, ContentPolicy.allowed(restored, true))
+            assertEquals(rating != ContentRating.EXPLICIT, ContentPolicy.allowed(restored, true))
         }
         val legacy = Song.parse(org.json.JSONObject().put("id", "old"))
-        assertFalse(ContentPolicy.allowed(MusicService.songFromItem(MusicService.item(legacy))!!, true))
+        assertTrue(ContentPolicy.allowed(MusicService.songFromItem(MusicService.item(legacy))!!, true))
     }
 }

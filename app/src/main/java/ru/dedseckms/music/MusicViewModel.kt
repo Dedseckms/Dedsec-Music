@@ -698,6 +698,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 if (revision != generation || app.credentials.activeId() != account || !state.value.isAdmin) return@withLock
                 val result = profile.await { setContentRating(song.id, rating) }
                 if (revision != generation || app.credentials.activeId() != account) return@withLock
+                withContext(Dispatchers.IO) { store.updateContentRating(song, result.rating, result.overridden) }
+                if (revision != generation || app.credentials.activeId() != account) return@withLock
                 fun updated(value: Song): Song = if (value.id == song.id) value.copy(contentRating = result.rating, contentRatingOverride = result.overridden) else value
                 fun updatedList(value: List<Song>) = value.map(::updated)
                 val changed = updated(song)
@@ -717,29 +719,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     coverQueue = current.coverQueue.map { it.copy(song = updated(it.song)) },
                     downloads = current.downloads.mapValues { (_, transfer) -> transfer.copy(indexedSong = transfer.indexedSong?.let(::updated)) },
                     uploads = current.uploads.map { it.copy(indexedSong = it.indexedSong?.let(::updated)) }) }
-                if (state.value.childMode) childMode(true) else app.contentRatingChanges.emit(account to changed)
-                withContext(Dispatchers.IO) {
-                    store.updateContentRating(song, result.rating, result.overridden)
-                    if (!ContentPolicy.allowed(changed, store.childMode())) {
-                        work.getWorkInfosByTag("downloads-$account").get().filter { "track:${song.id}" in it.tags && !it.state.isFinished }
-                            .forEach { work.cancelWorkById(it.id).result.get() }
-                        store.finishDownload(song.id)
-                    }
-                }
+                if (state.value.childMode && !ContentPolicy.allowed(changed, true) &&
+                    (state.value.now?.id == song.id || state.value.queue.any { it.id == song.id })) resetForContentPolicy()
+                if (!app.contentRatingChanges.tryEmit(account to changed)) viewModelScope.launch { app.contentRatingChanges.emit(account to changed) }
                 if (revision == generation && app.credentials.activeId() == account) toast("Маркировка контента обновлена")
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) { if (revision == generation) toast(safeMessage(error)) }
             finally { if (revision == generation) mutable.update { it.copy(contentRatingBusy = false) } }
         } }
     }
-    fun childMode(enabled: Boolean) {
-        local()?.childMode(enabled)
+    private fun resetForContentPolicy() {
         mixTask.cancel(); requestedSong = null; app.playRequests.clear()
         controller?.stop(); controller?.clearMediaItems()
         app.contentPolicyChanges.tryEmit(Unit)
-        mutable.update { it.copy(childMode = enabled, now = null, playing = false, buffering = false,
+        mutable.update { it.copy(now = null, playing = false, buffering = false,
             queue = emptyList(), coverQueue = emptyList(), queueStart = 0, queueIndex = 0, waveActive = false, mixLoading = false) }
-        if (enabled) toast("Детский режим включён. Выбери трек с подтверждённой отметкой без мата")
+    }
+    fun childMode(enabled: Boolean) {
+        local()?.childMode(enabled)
+        resetForContentPolicy()
+        mutable.update { it.copy(childMode = enabled) }
+        if (enabled) toast("Детский режим включён. Треки с отметкой E заблокированы")
     }
     fun autoOffline(afterListen: Boolean = state.value.autoOffline.afterListen, onFavorite: Boolean = state.value.autoOffline.onFavorite) {
         val value = OfflinePreferences(afterListen, onFavorite)

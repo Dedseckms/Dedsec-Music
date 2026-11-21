@@ -73,6 +73,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private val transferLock = Semaphore(1)
     private val downloadQueue = ArrayDeque<Song>()
     private var downloadJob: Job? = null
+    private var activeDownloadId: String? = null
     private var queueSaveJob: Job? = null
     private val offlineGate = OfflineListenGate()
     private val contentRatingLock = kotlinx.coroutines.sync.Mutex()
@@ -103,12 +104,12 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     private fun canonicalSong(song: Song) = store?.canonicalRating(song) ?: song
     private fun allowed(song: Song) = ContentPolicy.allowed(canonicalSong(song), state.value.childMode)
     fun childMode(enabled: Boolean) = applyChildMode(enabled, force = false)
-    private fun applyChildMode(enabled: Boolean, force: Boolean) {
+    private fun applyChildMode(enabled: Boolean, force: Boolean, resetDownloads: Boolean = true) {
         if (!force && enabled == state.value.childMode) return
         // Invalidate pending decoders and callbacks before publishing the new policy.
         queueEpoch++; playJob?.cancel(); prepareJob?.cancel(); invalidateMix()
         audio.stop(); audio.clearNext(); queue.set(emptyList(), 0)
-        downloadJob?.cancel(); downloadJob = null
+        if (resetDownloads) { downloadJob?.cancel(); downloadJob = null }
         downloadQueue.removeAll { !ContentPolicy.allowed(canonicalSong(it), enabled) }
         mutable.update { it.copy(childMode = enabled, now = null, queue = emptyList(), cursor = 0,
             wave = false, ended = false, busy = false, shuffle = false, transfer = null,
@@ -126,10 +127,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 val result = service.await { setContentRating(song.id, rating) }
                 currentCoroutineContext().ensureActive(); if (revision != generation) return@withLock
                 nav.invalidateContentRating(song.id)
-                val priorDownload = downloadJob; val priorSave = queueSaveJob
                 applyContentRating(song.id, result.rating, result.overridden, song)
-                priorDownload?.join(); priorSave?.join()
-                withContext(Dispatchers.IO) { local.refreshContentRatingMetadata(song.id) }
                 if (revision == generation) notice("Маркировка контента сохранена")
             } } catch (e: CancellationException) { throw e }
             catch (_: Exception) { if (revision == generation) notice("Не удалось изменить маркировку. Проверь права администратора и подключение") }
@@ -139,17 +137,19 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     internal fun applyContentRating(id: String, rating: ContentRating, overridden: Boolean, sourceSong: Song? = null) {
         val source = sourceSong ?: (state.value.songs + state.value.queue + state.value.offline + state.value.favorites + listOfNotNull(state.value.now)).firstOrNull { it.id == id }
         source?.let { store?.rememberContentRating(it, rating, overridden) }
-        // Old download metadata must not overwrite the administrator's new server result.
-        downloadJob?.cancel(); downloadJob = null; queueSaveJob?.cancel(); queueSaveJob = null
         fun updateSong(song: Song) = if (song.id == id) canonicalSong(song) else song
         fun updatePage(page: DesktopPage?) = page?.copy(songs = page.songs.map(::updateSong))
         queue.updateSong(id, ::updateSong)
-        val pending = downloadQueue.map(::updateSong); downloadQueue.clear(); downloadQueue.addAll(pending)
+        val blockedInQueue = state.value.childMode && queue.songs.any { it.id == id && !allowed(it) }
+        val cancelDownload = state.value.childMode && activeDownloadId == id && source?.let { !allowed(it) } == true
+        if (cancelDownload) { downloadJob?.cancel(); downloadJob = null }
+        val pending = downloadQueue.map(::updateSong).filter(::allowed); downloadQueue.clear(); downloadQueue.addAll(pending)
         destinations.replaceAll { _, value -> value.first to updatePage(value.second) }
         mutable.update { it.copy(songs = it.songs.map(::updateSong), favorites = it.favorites.map(::updateSong),
             offline = it.offline.map(::updateSong), page = updatePage(it.page), search = it.search.copy(songs = it.search.songs.map(::updateSong)),
-            now = it.now?.let(::updateSong), queue = it.queue.map(::updateSong)) }
-        if (state.value.childMode) applyChildMode(true, force = true) else downloadAll(emptyList(), silent = true)
+            now = it.now?.let(::updateSong), queue = it.queue.map(::updateSong), downloadIds = downloadQueue.mapTo(hashSetOf(), Song::id)) }
+        if (blockedInQueue) applyChildMode(true, force = true, resetDownloads = false)
+        if (cancelDownload) downloadAll(emptyList(), silent = true)
     }
     fun notice(text: String?) { mutable.update { it.copy(message = text) } }
     private fun failure(error: Exception) = if (error is java.io.IOException && !error.message.orEmpty().contains("http", true)) error.message ?: "Проверь соединение" else "Не удалось выполнить операцию. Проверь подключение"
@@ -519,6 +519,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
     }
     private suspend fun downloadOne(song: Song, local: DesktopStore, nav: NavApi, revision: Int) {
         currentCoroutineContext().ensureActive(); if (!allowed(song)) return
+        activeDownloadId = song.id
         mutable.update { it.copy(transfer = "Скачиваем: ${song.title}", downloadProgress = 0) }
         try {
             transfer(nav.client) { client ->
@@ -541,7 +542,7 @@ class DesktopController(val scope: CoroutineScope, private val preferences: Desk
                 } finally { Files.deleteIfExists(temp) }
             }
             if (revision == generation) { mutable.update { it.copy(offline = (it.offline + canonicalSong(song)).map(::canonicalSong).distinctBy(Song::id)) } }
-        } finally { if (revision == generation) mutable.update { it.copy(transfer = null) } }
+        } finally { if (revision == generation && activeDownloadId == song.id) { activeDownloadId = null; mutable.update { it.copy(transfer = null) } } }
     }
     fun removeOffline(song: Song) {
         val local = store ?: return; val revision = generation
