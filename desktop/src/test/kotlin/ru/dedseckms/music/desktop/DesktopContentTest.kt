@@ -49,9 +49,13 @@ class DesktopContentTest {
             c.play(listOf(explicit, clean))
             val pendingPlay = field(c, "playJob").get(c) as Job
             val oldEpoch = field(c, "queueEpoch").getLong(c)
+            val pendingPrepare = c.scope.launch { delay(Long.MAX_VALUE) }
+            val pendingMix = c.scope.launch { delay(Long.MAX_VALUE) }
+            field(c, "prepareJob").set(c, pendingPrepare)
+            field(c, "mixJob").set(c, pendingMix)
             assertEquals(explicit, c.state.value.now)
             c.childMode(true)
-            assertTrue(pendingPlay.isCancelled)
+            assertTrue(pendingPlay.isCancelled); assertTrue(pendingPrepare.isCancelled); assertTrue(pendingMix.isCancelled)
             assertNull(c.state.value.now); assertTrue(c.queue.songs.isEmpty())
             assertTrue(c.state.value.queue.isEmpty()); assertFalse(c.audio.state.value.playing)
             DesktopController::class.java.getDeclaredMethod("onCrossfaded", String::class.java).apply { isAccessible = true }.invoke(c, "$oldEpoch:1")
@@ -59,6 +63,9 @@ class DesktopContentTest {
             c.toggle(); c.skip(true); c.select(0)
             assertNull(c.state.value.now)
             assertTrue(c.store!!.childMode())
+            c.play(listOf(clean, clean.copy(id = "second")))
+            DesktopController::class.java.getDeclaredMethod("onCrossfaded", String::class.java).apply { isAccessible = true }.invoke(c, "$oldEpoch:1")
+            assertEquals(0, c.state.value.cursor); assertEquals(clean, c.state.value.now)
             c.childMode(false)
             assertNull(c.state.value.now); assertTrue(c.state.value.queue.isEmpty())
         } finally { c.close() }
