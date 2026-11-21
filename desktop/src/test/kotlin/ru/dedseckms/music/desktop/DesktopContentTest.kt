@@ -238,7 +238,7 @@ class DesktopContentTest {
         assertEquals(ContentRating.EXPLICIT, reopened.canonicalRating(old.copy(contentRatingCheckedAt = 1)).contentRating)
     }
 
-    @Test fun ratingAFutureTrackExplicitKeepsSafePlaybackAndUnrelatedDownloadRunning() {
+    @Test fun ratingAFutureTrackExplicitCancelsPendingPlaybackAndKeepsUnrelatedDownloadRunning() {
         val c = controller()
         try {
             c.childMode(true); c.play(listOf(clean, unknown))
@@ -247,10 +247,12 @@ class DesktopContentTest {
             field(c, "downloadJob").set(c, unrelatedDownload)
             field(c, "activeDownloadId").set(c, clean.id)
             c.applyContentRating(unknown.id, ContentRating.EXPLICIT, true)
-            assertEquals(clean, c.state.value.now); assertEquals(listOf(clean), c.state.value.queue)
-            assertFalse(playback.isCancelled); assertFalse(unrelatedDownload.isCancelled)
+            assertNull(c.state.value.now); assertTrue(c.state.value.queue.isEmpty())
+            assertTrue(playback.isCancelled); assertFalse(unrelatedDownload.isCancelled)
+            c.play(listOf(clean))
+            val freshPlayback = field(c, "playJob").get(c) as Job
             c.applyContentRating(unknown.id, ContentRating.UNKNOWN, false)
-            assertEquals(clean, c.state.value.now); assertFalse(playback.isCancelled)
+            assertEquals(clean, c.state.value.now); assertFalse(freshPlayback.isCancelled)
         } finally { c.close() }
     }
 
